@@ -1,0 +1,190 @@
+import { useEffect, useMemo, useState } from "react";
+import {
+  BarChart3,
+  BookOpen,
+  Check,
+  ChevronRight,
+  Clock3,
+  Coffee,
+  Database,
+  Heart,
+  Home,
+  ListTodo,
+  Music2,
+  Pause,
+  Play,
+  Plus,
+  RotateCcw,
+  Settings,
+  ShieldCheck,
+  Sparkles,
+  Trash2,
+  X,
+} from "lucide-react";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { getDailyContent, musicSearchUrl } from "./data/dailyContent";
+import { selectNextTask, useAppStore } from "./store";
+import { deleteNativeActivity, getDataLocation, getTodayStats, setNativeTracking, type TodayStats } from "./native";
+import type { Page, Priority, Task } from "./types";
+import "./App.css";
+
+const navItems: { id: Page; label: string; icon: typeof Home }[] = [
+  { id: "today", label: "今日", icon: Home },
+  { id: "review", label: "时间回顾", icon: BarChart3 },
+  { id: "tasks", label: "任务", icon: ListTodo },
+  { id: "content", label: "每日内容", icon: Sparkles },
+  { id: "privacy", label: "数据与隐私", icon: ShieldCheck },
+  { id: "settings", label: "设置", icon: Settings },
+];
+
+function greeting() {
+  const hour = new Date().getHours();
+  if (hour < 6) return "夜深了";
+  if (hour < 11) return "早上好";
+  if (hour < 14) return "中午好";
+  if (hour < 18) return "下午好";
+  return "晚上好";
+}
+
+function Onboarding() {
+  const finish = useAppStore((state) => state.finishOnboarding);
+  const [step, setStep] = useState(0);
+  const [nickname, setNickname] = useState("");
+  const [role, setRole] = useState("学生");
+  const [tone, setTone] = useState<"gentle" | "fun" | "direct" | "energetic">("gentle");
+  const [firstTask, setFirstTask] = useState("");
+
+  const steps = [
+    <div className="welcome" key="welcome">
+      <div className="brand-mark large">日</div>
+      <p className="eyebrow">欢迎使用 DayMate</p>
+      <h1>让每一天，更容易开始。</h1>
+      <p>回顾昨天、安排今天，也给生活添一点轻松和乐趣。</p>
+    </div>,
+    <div key="profile">
+      <p className="eyebrow">认识一下</p>
+      <h2>我们该怎么称呼你？</h2>
+      <label>昵称<input value={nickname} onChange={(event) => setNickname(event.target.value)} placeholder="朋友" /></label>
+      <label>你目前更接近<input value={role} onChange={(event) => setRole(event.target.value)} list="roles" /></label>
+      <datalist id="roles"><option>学生</option><option>研究生</option><option>职场人士</option><option>程序员</option><option>设计师</option><option>自由职业者</option><option>备考者</option><option>其他</option></datalist>
+    </div>,
+    <div key="tone">
+      <p className="eyebrow">陪伴方式</p><h2>你喜欢怎样的语气？</h2>
+      <div className="option-grid">
+        {([['gentle','温柔陪伴'],['fun','轻松幽默'],['direct','简洁直接'],['energetic','热血鼓励']] as const).map(([value,label]) => (
+          <button className={`option ${tone === value ? 'selected' : ''}`} onClick={() => setTone(value)} key={value}>{label}</button>
+        ))}
+      </div>
+    </div>,
+    <div key="privacy">
+      <p className="eyebrow">隐私承诺</p><h2>你的日常，只属于你。</h2>
+      <div className="privacy-list"><p><Check /> 默认只记录应用名称和使用时长</p><p><Check /> 不记录键盘输入、不截屏、不读聊天正文</p><p><Check /> 窗口标题默认关闭</p><p><Check /> 所有数据默认留在本机</p></div>
+    </div>,
+    <div key="task">
+      <p className="eyebrow">第一小步</p><h2>今天最想推进什么？</h2>
+      <label>写下一件事<input autoFocus value={firstTask} onChange={(event) => setFirstTask(event.target.value)} placeholder="例如：修改汇报 PPT 的第三页" /></label>
+      <p className="muted">不用写完整计划，一件具体的小事就够了。</p>
+    </div>,
+  ];
+
+  return <main className="onboarding-shell"><section className="onboarding-card">{steps[step]}<footer><div className="dots">{steps.map((_, index) => <i className={index === step ? "active" : ""} key={index} />)}</div><div className="actions">{step > 0 && <button className="button ghost" onClick={() => setStep(step - 1)}>上一步</button>}<button className="button primary" onClick={() => step === steps.length - 1 ? finish({ nickname: nickname.trim() || "朋友", role, tone }, firstTask) : setStep(step + 1)}>{step === steps.length - 1 ? "开始今天" : "继续"}<ChevronRight size={18} /></button></div></footer></section></main>;
+}
+
+function AddTaskModal({ onClose }: { onClose: () => void }) {
+  const addTask = useAppStore((state) => state.addTask);
+  const [title, setTitle] = useState("");
+  const [minutes, setMinutes] = useState(25);
+  const [priority, setPriority] = useState<Priority>("medium");
+  const [dueDate, setDueDate] = useState("");
+  return <div className="modal-backdrop" onMouseDown={onClose}><form className="modal" onMouseDown={(event) => event.stopPropagation()} onSubmit={(event) => { event.preventDefault(); if (!title.trim()) return; addTask(title, minutes, priority, dueDate); onClose(); }}><header><div><p className="eyebrow">今天，从一件事开始</p><h2>添加任务</h2></div><button type="button" className="icon-button" onClick={onClose}><X /></button></header><label>任务名称<input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} placeholder="要推进的具体事情" /></label><div className="form-row"><label>预计时间<select value={minutes} onChange={(event) => setMinutes(Number(event.target.value))}><option value={5}>5 分钟</option><option value={15}>15 分钟</option><option value={25}>25 分钟</option><option value={45}>45 分钟</option><option value={60}>60 分钟</option></select></label><label>优先级<select value={priority} onChange={(event) => setPriority(event.target.value as Priority)}><option value="high">高</option><option value="medium">中</option><option value="low">低</option></select></label></div><label>截止日期（可选）<input type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} /></label><button className="button primary wide" type="submit">添加到今天</button></form></div>;
+}
+
+function FocusModal({ task, onClose }: { task: Task; onClose: () => void }) {
+  const toggleTask = useAppStore((state) => state.toggleTask);
+  const [seconds, setSeconds] = useState(task.estimatedMinutes * 60);
+  const [running, setRunning] = useState(true);
+  useEffect(() => {
+    if (!running || seconds <= 0) return;
+    const timer = window.setInterval(() => setSeconds((value) => value - 1), 1000);
+    return () => window.clearInterval(timer);
+  }, [running, seconds]);
+  const progress = 1 - seconds / (task.estimatedMinutes * 60);
+  return <div className="focus-overlay"><button className="icon-button focus-close" onClick={onClose}><X /></button><div className="focus-content"><p className="eyebrow">正在专注</p><h2>{task.title}</h2><div className="timer-ring" style={{ '--progress': `${progress * 360}deg` } as React.CSSProperties}><div><strong>{String(Math.floor(seconds / 60)).padStart(2,'0')}:{String(seconds % 60).padStart(2,'0')}</strong><span>{running ? '慢慢来，只做眼前这一点' : '已经暂停，准备好再继续'}</span></div></div><div className="focus-actions"><button className="button secondary" onClick={() => setRunning(!running)}>{running ? <Pause /> : <Play />}{running ? '暂停' : '继续'}</button><button className="button primary" onClick={() => { if (!task.completed) toggleTask(task.id); onClose(); }}><Check />完成任务</button></div></div></div>;
+}
+
+function TaskRow({ task, onFocus }: { task: Task; onFocus: (task: Task) => void }) {
+  const toggleTask = useAppStore((state) => state.toggleTask);
+  const removeTask = useAppStore((state) => state.removeTask);
+  return <article className={`task-row ${task.completed ? 'completed' : ''}`}><button className="task-check" onClick={() => toggleTask(task.id)}>{task.completed && <Check size={15} />}</button><div className="task-copy"><strong>{task.title}</strong><span><Clock3 size={14} /> {task.estimatedMinutes} 分钟 {task.dueDate && ` · ${task.dueDate} 截止`}</span></div><span className={`priority ${task.priority}`}>{task.priority === 'high' ? '重要' : task.priority === 'medium' ? '普通' : '轻松'}</span>{!task.completed && <button className="mini-button" onClick={() => onFocus(task)}><Play size={14} /> 开始</button>}<button className="icon-button subtle" onClick={() => removeTask(task.id)} aria-label="删除任务"><Trash2 size={16} /></button></article>;
+}
+
+function Dashboard({ onAdd, onFocus, setPage }: { onAdd: () => void; onFocus: (task: Task) => void; setPage: (page: Page) => void }) {
+  const { tasks, preferences } = useAppStore();
+  const content = getDailyContent();
+  const active = tasks.filter((task) => !task.completed).slice(0, 3);
+  const next = selectNextTask(tasks);
+  return <div className="page"><header className="page-header hero"><div><p className="date-line">{new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' }).format(new Date())}</p><h1>{greeting()}，{preferences.nickname}。</h1><p>今天也不用一下子解决所有事情，我们先找到值得开始的那一件。</p></div><button className="button primary" onClick={onAdd}><Plus />添加任务</button></header><section className="dashboard-grid"><article className="card overview-card"><div className="card-heading"><div><p className="eyebrow">昨日简报</p><h2>昨天还没有记录</h2></div><div className="soft-icon"><BarChart3 /></div></div><p>今天开始以后，明天这里就会出现属于你的第一份回顾。</p><button className="text-button" onClick={() => setPage('review')}>查看时间回顾 <ChevronRight size={16} /></button></article><article className="card supply-card"><div className="card-heading"><div><p className="eyebrow">今日精神补给</p><h2>“{content.quote.text}”</h2></div><Heart /></div><p>— {content.quote.author}</p><div className="music-pill"><Music2 /><div><strong>{content.music.title}</strong><span>{content.music.artist} · {content.music.scene}</span></div><button className="icon-button" onClick={() => openUrl(musicSearchUrl(preferences.musicPlatform, content.music.title, content.music.artist))}><Play size={16} /></button></div></article></section><section className="section-block"><div className="section-heading"><div><p className="eyebrow">今日三件事</p><h2>先把世界缩小一点</h2></div>{next && <button className="button secondary" onClick={() => onFocus(next)}><Sparkles />帮我选一件</button>}</div><div className="task-list">{active.length ? active.map((task) => <TaskRow key={task.id} task={task} onFocus={onFocus} />) : <button className="empty-task" onClick={onAdd}><Plus /><strong>写下今天最想推进的一件事</strong><span>一件就够了，随时可以再加。</span></button>}</div></section><section className="mini-grid"><article className="mini-card"><Coffee /><div><span>轻松一刻</span><p>{content.joke}</p></div></article><article className="mini-card"><Sparkles /><div><span>今日微挑战</span><p>{content.challenge}</p></div></article></section></div>;
+}
+
+function TasksPage({ onAdd, onFocus }: { onAdd: () => void; onFocus: (task: Task) => void }) {
+  const tasks = useAppStore((state) => state.tasks);
+  const [filter, setFilter] = useState<'today' | 'active' | 'done'>('today');
+  const visible = tasks.filter((task) => filter === 'done' ? task.completed : filter === 'active' ? !task.completed : true);
+  return <div className="page"><header className="page-header"><div><p className="eyebrow">任务</p><h1>把要做的事，放到看得见的地方。</h1><p>不需要维护复杂项目，先照顾好今天。</p></div><button className="button primary" onClick={onAdd}><Plus />添加任务</button></header><div className="tabs">{([['today','全部'],['active','进行中'],['done','已完成']] as const).map(([value,label]) => <button className={filter === value ? 'active' : ''} onClick={() => setFilter(value)} key={value}>{label}<span>{value === 'today' ? tasks.length : tasks.filter((task) => value === 'done' ? task.completed : !task.completed).length}</span></button>)}</div><div className="task-list spacious">{visible.length ? visible.map((task) => <TaskRow key={task.id} task={task} onFocus={onFocus} />) : <div className="empty-state"><ListTodo /><h2>这里暂时是空的</h2><p>没有堆积，也是一种进展。</p></div>}</div></div>;
+}
+
+function ReviewPage() {
+  const [stats, setStats] = useState<TodayStats>({ activeSeconds: 0, idleSeconds: 0, appSwitches: 0, topApps: [] });
+  useEffect(() => { getTodayStats().then(setStats).catch(() => undefined); }, []);
+  const minutes = (seconds: number) => `${Math.floor(seconds / 60)} 分钟`;
+  return <div className="page"><header className="page-header"><div><p className="eyebrow">时间回顾</p><h1>看见节奏，不给自己打分。</h1><p>活动采集启动后，这里会呈现真实的应用时长与专注区间。</p></div><input className="date-picker" type="date" defaultValue={new Date().toISOString().slice(0,10)} /></header><section className="stats-grid">{[['电脑活跃',minutes(stats.activeSeconds)],['当前应用',stats.currentApp ?? '等待数据'],['离开电脑',minutes(stats.idleSeconds)],['应用切换',`${stats.appSwitches} 次`]].map(([label,value]) => <article className="stat-card" key={label}><span>{label}</span><strong>{value}</strong><small>今日本机数据</small></article>)}</section><section className="card timeline"><div className="card-heading"><div><p className="eyebrow">应用排行</p><h2>今天的主要足迹</h2></div><Clock3 /></div>{stats.topApps.length ? <div className="app-ranking">{stats.topApps.map((app) => <div key={app.appName}><strong>{app.appName}</strong><span>{minutes(app.seconds)}</span></div>)}</div> : <div className="empty-state"><BarChart3 /><h2>还没有可展示的活动</h2><p>保持“应用活动记录”开启，使用一分钟后再回来看看。</p></div>}</section></div>;
+}
+
+function ContentPage() {
+  const preferences = useAppStore((state) => state.preferences);
+  const [offset, setOffset] = useState(0);
+  const content = getDailyContent(offset);
+  return <div className="page"><header className="page-header"><div><p className="eyebrow">每日内容</p><h1>给认真生活的人，一点小小补给。</h1><p>同一天默认保持一致，也可以随时换一组。</p></div><button className="button secondary" onClick={() => setOffset(offset + 1)}><RotateCcw />换一组</button></header><section className="content-grid"><article className="content-card quote"><BookOpen /><span>每日好句</span><h2>“{content.quote.text}”</h2><p>— {content.quote.author}</p></article><article className="content-card music"><Music2 /><span>今日音乐</span><h2>{content.music.title}</h2><p>{content.music.artist} · {content.music.scene}</p><button className="button secondary" onClick={() => openUrl(musicSearchUrl(preferences.musicPlatform, content.music.title, content.music.artist))}><Play />打开音乐</button></article><article className="content-card"><Coffee /><span>轻松一刻</span><h2>{content.joke}</h2></article><article className="content-card"><Sparkles /><span>今日微挑战</span><h2>{content.challenge}</h2></article></section></div>;
+}
+
+function PrivacyPage() {
+  const { preferences, updatePreferences } = useAppStore();
+  const [location, setLocation] = useState("正在读取本地数据位置…");
+  useEffect(() => { getDataLocation().then(setLocation).catch(() => setLocation("暂时无法读取数据位置")); }, []);
+  const toggles = [
+    ['trackActivity','应用活动记录','只统计应用名称、类别和活跃时长'],
+    ['trackWindowTitles','窗口标题记录','可能包含文件名，默认关闭'],
+    ['idleDetection','空闲状态检测','离开电脑后不把时间计入应用'],
+  ] as const;
+  const updateTracking = (key: 'trackActivity' | 'trackWindowTitles' | 'idleDetection', checked: boolean) => {
+    const next = { ...preferences, [key]: checked };
+    updatePreferences({ [key]: checked });
+    setNativeTracking(next.trackActivity, next.trackWindowTitles).catch(() => undefined);
+  };
+  const clearData = async () => { if (!window.confirm('确定删除全部活动记录吗？此操作不可撤销。')) return; await deleteNativeActivity(); };
+  return <div className="page"><header className="page-header"><div><p className="eyebrow">数据与隐私</p><h1>你始终拥有控制权。</h1><p>DayMate 不记录键盘输入、不截屏、不读取聊天或文档正文。</p></div><div className="privacy-badge"><ShieldCheck />本地优先</div></header><section className="privacy-layout"><article className="card"><div className="card-heading"><div><p className="eyebrow">记录控制</p><h2>正在记录什么</h2></div><Database /></div><div className="setting-list">{toggles.map(([key,title,description]) => <label className="setting-row" key={key}><div><strong>{title}</strong><span>{description}</span></div><input type="checkbox" checked={preferences[key]} onChange={(event) => updateTracking(key, event.target.checked)} /></label>)}</div><p className="data-path">数据位置：{location}</p></article><article className="card promise"><p className="eyebrow">明确不会做</p><h2>边界比功能更重要</h2><ul><li><Check />不记录键盘输入内容</li><li><Check />不截取或分析屏幕</li><li><Check />不读取聊天与文档正文</li><li><Check />不默认上传活动数据</li><li><Check />不把 API Key 写入普通日志</li></ul></article></section><section className="danger-zone"><div><strong>清理活动数据</strong><span>任务和个人设置不会被删除。此操作需要二次确认。</span></div><button className="button danger" onClick={clearData}>清空活动数据</button></section></div>;
+}
+
+function SettingsPage() {
+  const { preferences, updatePreferences } = useAppStore();
+  return <div className="page"><header className="page-header"><div><p className="eyebrow">设置</p><h1>把陪伴调成你舒服的样子。</h1><p>所有选择均保存在本机。</p></div></header><section className="settings-card"><h2>通用</h2><label className="setting-row"><div><strong>昵称</strong><span>用于每天的问候</span></div><input className="compact-input" value={preferences.nickname} onChange={(event) => updatePreferences({ nickname: event.target.value })} /></label><label className="setting-row"><div><strong>主题</strong><span>跟随系统或手动指定</span></div><select value={preferences.theme} onChange={(event) => updatePreferences({ theme: event.target.value as typeof preferences.theme })}><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select></label><label className="setting-row"><div><strong>默认音乐平台</strong><span>点击音乐时打开</span></div><select value={preferences.musicPlatform} onChange={(event) => updatePreferences({ musicPlatform: event.target.value as typeof preferences.musicPlatform })}><option value="netease">网易云音乐</option><option value="qq">QQ 音乐</option><option value="spotify">Spotify</option><option value="apple">Apple Music</option><option value="youtube">YouTube Music</option></select></label></section><section className="settings-card"><h2>启动与通知</h2>{([['autostart','开机自动启动','需要你主动开启'],['notifications','桌面通知','任务完成或休息时温和提醒']] as const).map(([key,title,description]) => <label className="setting-row" key={key}><div><strong>{title}</strong><span>{description}</span></div><input type="checkbox" checked={preferences[key]} onChange={(event) => updatePreferences({ [key]: event.target.checked })} /></label>)}</section><section className="settings-card about"><div className="brand-mark">日</div><div><strong>DayMate 日伴</strong><span>版本 0.1.0 · 本地优先桌面陪伴应用</span></div></section></div>;
+}
+
+export default function App() {
+  const onboarded = useAppStore((state) => state.onboarded);
+  const theme = useAppStore((state) => state.preferences.theme);
+  const [page, setPage] = useState<Page>('today');
+  const [adding, setAdding] = useState(false);
+  const [focusTask, setFocusTask] = useState<Task>();
+  useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
+  const body = useMemo(() => {
+    if (page === 'today') return <Dashboard onAdd={() => setAdding(true)} onFocus={setFocusTask} setPage={setPage} />;
+    if (page === 'tasks') return <TasksPage onAdd={() => setAdding(true)} onFocus={setFocusTask} />;
+    if (page === 'review') return <ReviewPage />;
+    if (page === 'content') return <ContentPage />;
+    if (page === 'privacy') return <PrivacyPage />;
+    return <SettingsPage />;
+  }, [page]);
+  if (!onboarded) return <Onboarding />;
+  return <div className="app-shell"><aside className="sidebar"><div className="brand"><div className="brand-mark">日</div><div><strong>DayMate</strong><span>日伴</span></div></div><nav>{navItems.map((item) => <button key={item.id} className={page === item.id ? 'active' : ''} onClick={() => setPage(item.id)}><item.icon size={19} /><span>{item.label}</span></button>)}</nav><div className="sidebar-note"><Sparkles size={17} /><p>不用准备好才开始。<br />开始以后，会慢慢准备好的。</p></div></aside><main className="main-content">{body}</main>{adding && <AddTaskModal onClose={() => setAdding(false)} />}{focusTask && <FocusModal task={focusTask} onClose={() => setFocusTask(undefined)} />}</div>;
+}

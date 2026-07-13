@@ -1,0 +1,40 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: npm ci
+      - run: npm run version:check
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run test
+      - run: cargo test --manifest-path src-tauri/Cargo.toml
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "DayMate ${{ github.ref_name }}"
+          releaseBody: |
+            本版本的正式更新纪要见仓库 CHANGELOG.md 对应版本。
+
+            下载 `setup.exe` 后直接安装，普通用户不需要 Node.js 或 Rust。
+          releaseDraft: true
+          prerelease: false
+          includeUpdaterJson: false
