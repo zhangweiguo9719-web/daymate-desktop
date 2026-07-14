@@ -32,9 +32,16 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: "DayMate ${{ github.ref_name }}"
           releaseBody: |
-            本版本的正式更新纪要见仓库 CHANGELOG.md 对应版本。
+            ## DayMate 0.1.1
+
+            - 新增可拖动的桌面浮动球，点击即可恢复主窗口。
+            - 新增桌面浮动球设置开关和“收起为浮球”快捷操作。
+            - 更新 DayMate 正式品牌图标，并用于程序、托盘和安装包。
+            - README 新增真实应用截图。
+
+            数据库迁移：无。
 
             下载 `setup.exe` 后直接安装，普通用户不需要 Node.js 或 Rust。
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
           includeUpdaterJson: false
