@@ -8,14 +8,6 @@ const quotes = [
   { text: "休息不是停止前进，而是为下一段路留出力气。", author: "佚名" },
 ];
 
-const music = [
-  { title: "One Summer's Day", artist: "久石让", scene: "安静启动" },
-  { title: "River Flows in You", artist: "Yiruma", scene: "轻柔专注" },
-  { title: "夜空中最亮的星", artist: "逃跑计划", scene: "找回一点力量" },
-  { title: "晴天", artist: "周杰伦", scene: "午后回血" },
-  { title: "Experience", artist: "Ludovico Einaudi", scene: "沉浸工作" },
-];
-
 const jokes = [
   "今日宜：先打开文件。至于打开以后干什么，交给五分钟后的自己。",
   "电脑风扇已经开始努力了，咱也象征性努力五分钟。",
@@ -40,20 +32,7 @@ function dayIndex(length: number, offset = 0) {
 export function getDailyContent(offset = 0): DailyContent {
   return {
     quote: quotes[dayIndex(quotes.length, offset)],
-    music: music[dayIndex(music.length, offset * 2)],
     joke: jokes[dayIndex(jokes.length, offset * 3)],
     challenge: challenges[dayIndex(challenges.length, offset * 4)],
   };
-}
-
-export function musicSearchUrl(platform: string, title: string, artist: string) {
-  const query = encodeURIComponent(`${title} ${artist}`);
-  const platforms: Record<string, string> = {
-    netease: `https://music.163.com/#/search/m/?s=${query}`,
-    qq: `https://y.qq.com/n/ryqq/search?w=${query}`,
-    spotify: `https://open.spotify.com/search/${query}`,
-    apple: `https://music.apple.com/cn/search?term=${query}`,
-    youtube: `https://music.youtube.com/search?q=${query}`,
-  };
-  return platforms[platform] ?? platforms.netease;
 }

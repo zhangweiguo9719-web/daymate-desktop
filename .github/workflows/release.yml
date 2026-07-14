@@ -32,12 +32,13 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: "DayMate ${{ github.ref_name }}"
           releaseBody: |
-            ## DayMate 0.1.1
+            ## DayMate 0.2.0
 
-            - 新增可拖动的桌面浮动球，点击即可恢复主窗口。
-            - 新增桌面浮动球设置开关和“收起为浮球”快捷操作。
-            - 更新 DayMate 正式品牌图标，并用于程序、托盘和安装包。
-            - README 新增真实应用截图。
+            - 新增 Audius 在线曲库搜索与应用内播放，不再局限于四首默认音乐。
+            - 支持按场景分类、使用偏好和 AI 建议推荐音乐；切换页面或隐藏窗口时继续播放。
+            - 新增每天自动变化、可手动切换的舒适渐变背景。
+            - 新增商汤、OpenAI、DeepSeek、通义千问、智谱、Moonshot、OpenRouter、Ollama 和自定义接口配置。
+            - API Key 保存到 Windows 凭据管理器，不写入数据库或普通配置。
 
             数据库迁移：无。
 
@@ -45,3 +46,12 @@ jobs:
           releaseDraft: false
           prerelease: false
           includeUpdaterJson: false
+      - name: Upload SHA256 checksum
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $installer = Get-ChildItem "src-tauri/target/release/bundle/nsis/*.exe" | Select-Object -First 1
+          $hash = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $($installer.Name)" | Set-Content SHA256SUMS.txt -Encoding ascii
+          gh release upload "${{ github.ref_name }}" SHA256SUMS.txt --clobber

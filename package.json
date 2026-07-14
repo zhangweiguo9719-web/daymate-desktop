@@ -1,7 +1,7 @@
 {
   "name": "daymate-desktop",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -16,7 +16,9 @@
     "version:check": "node scripts/check-version.mjs",
     "desktop:dev": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows-desktop.ps1 dev",
     "desktop:build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows-desktop.ps1 build",
-    "desktop:check": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows-desktop.ps1 check"
+    "desktop:check": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows-desktop.ps1 check",
+    "desktop:test": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows-desktop.ps1 test",
+    "desktop:clippy": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows-desktop.ps1 clippy"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

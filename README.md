@@ -8,7 +8,7 @@
 
 DayMate 是一款 Windows 优先、本地优先的桌面陪伴应用。它不是企业监控软件，也不是要求用户维护复杂清单的项目管理工具。它只想帮用户看见昨天、选出今天最值得做的一件事，并更轻松地开始。
 
-当前版本：`0.1.1`（MVP 开发版）
+当前版本：`0.2.0`（MVP 开发版）
 
 ## 已实现
 
@@ -16,7 +16,11 @@ DayMate 是一款 Windows 优先、本地优先的桌面陪伴应用。它不是
 - 今日首页：问候、今日三件事、规则选任务、每日精神补给
 - 任务：新增、完成、删除、优先级、预计时间、截止日期
 - 专注模式：倒计时、暂停/继续、提前完成
-- 每日内容：好句、音乐、轻松一刻、微挑战；音乐跳转外部平台
+- 每日内容：好句、应用内智能音乐、轻松一刻、微挑战；音乐与其他卡片独立切换
+- 音乐偏好与搜索：智能、专注、国风民乐、古典、自然、电子六类，支持本地歌曲导入
+- 四首 CC0 音乐随应用离线提供，网络曲库不可用时也能播放
+- 每日舒适背景：七套柔和渐变按日期稳定轮换，也可随时手动换景
+- 多 AI 服务商设置与连接测试；API Key 安全保存到 Windows 凭据管理器
 - 隐私控制：活动记录、窗口标题、空闲检测开关和二次确认删除
 - Windows 活动采集后端：前台进程、可选窗口标题、5 分钟空闲排除、60 秒批量落库
 - SQLite 数据库：WAL、迁移记录、会话索引、今日统计查询
@@ -26,7 +30,7 @@ DayMate 是一款 Windows 优先、本地优先的桌面陪伴应用。它不是
 
 ## 应用截图
 
-![DayMate 今日主界面](docs/screenshots/daymate-dashboard.png)
+![DayMate 0.2.0 今日主界面与 Audius 音乐推荐](docs/screenshots/daymate-dashboard-v0.2.0.png)
 
 ![DayMate 桌面浮动球](docs/screenshots/daymate-floating-ball.png)
 
@@ -40,6 +44,8 @@ DayMate 是一款 Windows 优先、本地优先的桌面陪伴应用。它不是
 | UI | 原生 CSS + Lucide React | 轻量界面与图标 |
 | 桌面后端 | Rust | Windows 活动采集、隐私边界、数据库 |
 | 本地数据库 | SQLite / rusqlite | 应用使用会话与迁移记录 |
+| 音乐 | Audius API + CC0 本地曲库 + HTML Audio | 大型开放音乐目录搜索、应用内流式播放、离线兜底与 AI 场景推荐 |
+| AI 接口 | OpenAI 兼容协议 + Windows Credential Manager | 多平台配置、连接测试和密钥隔离 |
 | 校验测试 | TypeScript、ESLint、Vitest、Clippy | 类型、规则和构建质量 |
 | 发布 | GitHub Actions + GitHub Releases | Tag 触发 Windows 构建和发布 |
 
@@ -47,12 +53,13 @@ DayMate 是一款 Windows 优先、本地优先的桌面陪伴应用。它不是
 
 ```text
 React UI
-  ├─ 今日 / 任务 / 专注 / 每日内容
+  ├─ 今日 / 任务 / 专注 / 每日内容 / 每日背景
   ├─ 主窗口 / 可拖动桌面浮动球
   ├─ Zustand：任务与用户偏好
   └─ native.ts：唯一 Tauri 调用边界
              │ invoke
 Rust / Tauri ├─ Windows 前台应用与空闲检测
+             ├─ AI 密钥系统凭据存储与连接测试
              ├─ 60 秒内存聚合，避免高频写盘
              └─ SQLite：app_usage_sessions + migration_history
 ```
@@ -136,16 +143,18 @@ src-tauri/target/release/bundle/nsis/
 - 默认记录应用名称和活跃时长；窗口标题默认关闭。
 - 不记录键盘输入、不截屏、不读取聊天与文档正文。
 - 活动数据默认只保存在本机 SQLite。
+- AI Key 只保存在 Windows 凭据管理器；普通配置中不保存或回显完整密钥。
+- 智能音乐会向 Audius 发送通用场景词或用户主动输入的搜索词并直接加载所选音频，不发送任务标题或活动明细。
 - 本仓库附带的 D 盘启动脚本把开发数据保存到 `D:\DayMate\data`；正式安装版默认遵循系统应用数据目录。
 - 当前 MVP 不包含账号、云同步或活动数据上传。
 - 所有记录开关可关闭，活动数据可删除。
 
 ## 当前边界
 
-- v0.1.0 优先支持 Windows 10/11。
+- 当前优先支持 Windows 10/11。
 - 任务与偏好当前由 WebView 本地存储保存；活动记录使用 SQLite。后续版本会统一迁移至 SQLite。
 - 开机自启和桌面通知设置已保留 UI，正式发布前需要接入并完成 Windows 实机验证。
-- AI、云同步、邮件/日历读取不属于 v0.1.0。
+- AI 自然语言总结尚未接入业务页面；v0.2.0 已完成多平台安全配置和连接基础。
 
 ## 开源协议
 

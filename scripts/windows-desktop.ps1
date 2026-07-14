@@ -1,5 +1,5 @@
 param(
-  [ValidateSet("dev", "build", "check")]
+  [ValidateSet("dev", "build", "check", "test", "clippy")]
   [string]$Mode = "dev"
 )
 
@@ -32,6 +32,8 @@ $action = switch ($Mode) {
   "dev" { "npm run tauri dev" }
   "build" { "npm run tauri build" }
   "check" { "cargo check --manifest-path src-tauri\Cargo.toml" }
+  "test" { "cargo test --manifest-path src-tauri\Cargo.toml" }
+  "clippy" { "cargo clippy --manifest-path src-tauri\Cargo.toml -- -D warnings" }
 }
 
 $command = "call `"$vcvars`" && set `"CARGO_HOME=$env:CARGO_HOME`" && set `"RUSTUP_HOME=$env:RUSTUP_HOME`" && set `"DAYMATE_DATA_DIR=$dataRoot`" && set `"PATH=$env:Path`" && set `"LIB=$lib`" && $action"

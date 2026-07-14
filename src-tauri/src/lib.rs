@@ -1,6 +1,6 @@
 use chrono::{DateTime, Local, Utc};
 use rusqlite::{params, Connection};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     path::{Path, PathBuf},
     sync::{
@@ -11,6 +11,8 @@ use std::{
     time::{Duration, Instant},
 };
 use tauri::{tray::TrayIconBuilder, Manager, State};
+
+const AI_KEYRING_SERVICE: &str = "com.daymate.desktop.ai";
 
 struct AppState {
     database_path: PathBuf,
@@ -34,6 +36,13 @@ struct TodayStats {
 struct AppUsage {
     app_name: String,
     seconds: i64,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AiMusicSuggestion {
+    category: String,
+    reason: String,
 }
 
 fn initialize_database(path: &Path) -> Result<(), String> {
@@ -301,6 +310,153 @@ fn data_location(state: State<'_, AppState>) -> String {
     state.database_path.display().to_string()
 }
 
+fn ai_key_entry(provider: &str) -> Result<keyring::Entry, String> {
+    if provider.is_empty()
+        || !provider.chars().all(|character| {
+            character.is_ascii_alphanumeric() || character == '-' || character == '_'
+        })
+    {
+        return Err("无效的 AI 服务商标识".into());
+    }
+    keyring::Entry::new(AI_KEYRING_SERVICE, provider).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn save_ai_key(provider: String, api_key: String) -> Result<(), String> {
+    let api_key = api_key.trim();
+    if api_key.is_empty() {
+        return Err("API Key 不能为空".into());
+    }
+    ai_key_entry(&provider)?
+        .set_password(api_key)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn has_ai_key(provider: String) -> Result<bool, String> {
+    Ok(ai_key_entry(&provider)?.get_password().is_ok())
+}
+
+#[tauri::command]
+fn delete_ai_key(provider: String) -> Result<(), String> {
+    let entry = ai_key_entry(&provider)?;
+    if entry.get_password().is_ok() {
+        entry
+            .delete_credential()
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn test_ai_connection(
+    provider: String,
+    base_url: String,
+    model: String,
+    needs_key: bool,
+) -> Result<String, String> {
+    let base_url = base_url.trim().trim_end_matches('/');
+    let is_local =
+        base_url.starts_with("http://127.0.0.1") || base_url.starts_with("http://localhost");
+    if !base_url.starts_with("https://") && !is_local {
+        return Err("远程 AI 接口必须使用 HTTPS；仅本机 Ollama 可使用 HTTP".into());
+    }
+    if model.trim().is_empty() {
+        return Err("模型名称不能为空".into());
+    }
+    let mut request = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()
+        .map_err(|error| error.to_string())?
+        .post(format!("{base_url}/chat/completions"))
+        .json(&serde_json::json!({
+            "model": model.trim(),
+            "messages": [{ "role": "user", "content": "请只回复：连接成功" }],
+            "max_tokens": 16,
+            "temperature": 0
+        }));
+    if needs_key {
+        let key = ai_key_entry(&provider)?
+            .get_password()
+            .map_err(|_| "请先保存该服务商的 API Key".to_string())?;
+        request = request.bearer_auth(key);
+    }
+    let response = request
+        .send()
+        .map_err(|error| format!("连接失败：{error}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        let detail = response.text().unwrap_or_default();
+        let detail = detail.chars().take(180).collect::<String>();
+        return Err(format!("接口返回 {status}：{detail}"));
+    }
+    Ok("连接成功，配置可以使用。".into())
+}
+
+#[tauri::command]
+fn recommend_music_with_ai(
+    provider: String,
+    base_url: String,
+    model: String,
+    preferred_category: String,
+    active_minutes: i64,
+    unfinished_tasks: usize,
+) -> Result<AiMusicSuggestion, String> {
+    let base_url = base_url.trim().trim_end_matches('/');
+    let is_local =
+        base_url.starts_with("http://127.0.0.1") || base_url.starts_with("http://localhost");
+    if !base_url.starts_with("https://") && !is_local {
+        return Err("远程 AI 接口必须使用 HTTPS".into());
+    }
+    let prompt = format!(
+        "你是温和的音乐陪伴助手。根据这些最小化汇总数据选择一个音乐类别：当前偏好={preferred_category}，今日电脑活跃={active_minutes}分钟，未完成任务={unfinished_tasks}项。只能从 smart、focus、chinese、classical、ambient、electronic 中选一个。只返回JSON：{{\"category\":\"focus\",\"reason\":\"一句不超过40字的中文理由\"}}。不要推荐具体商业歌曲。"
+    );
+    let mut request = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(25))
+        .build()
+        .map_err(|error| error.to_string())?
+        .post(format!("{base_url}/chat/completions"))
+        .json(&serde_json::json!({
+            "model": model.trim(),
+            "messages": [{ "role": "user", "content": prompt }],
+            "max_tokens": 120,
+            "temperature": 0.4
+        }));
+    if provider != "ollama" {
+        let key = ai_key_entry(&provider)?
+            .get_password()
+            .map_err(|_| "请先在设置中保存该服务商的 API Key".to_string())?;
+        request = request.bearer_auth(key);
+    }
+    let response = request
+        .send()
+        .map_err(|error| format!("AI 推荐失败：{error}"))?;
+    if !response.status().is_success() {
+        return Err(format!("AI 接口返回 {}", response.status()));
+    }
+    let body: serde_json::Value = response.json().map_err(|error| error.to_string())?;
+    let content = body["choices"][0]["message"]["content"]
+        .as_str()
+        .ok_or("AI 没有返回可读取的推荐")?;
+    let start = content.find('{').ok_or("AI 推荐格式不正确")?;
+    let end = content.rfind('}').ok_or("AI 推荐格式不正确")?;
+    let suggestion: AiMusicSuggestion =
+        serde_json::from_str(&content[start..=end]).map_err(|_| "AI 推荐格式不正确")?;
+    if ![
+        "smart",
+        "focus",
+        "chinese",
+        "classical",
+        "ambient",
+        "electronic",
+    ]
+    .contains(&suggestion.category.as_str())
+    {
+        return Err("AI 返回了不支持的音乐类别".into());
+    }
+    Ok(suggestion)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -338,7 +494,12 @@ pub fn run() {
             set_tracking,
             get_today_stats,
             delete_activity_data,
-            data_location
+            data_location,
+            save_ai_key,
+            has_ai_key,
+            delete_ai_key,
+            test_ai_connection,
+            recommend_music_with_ai
         ])
         .run(tauri::generate_context!())
         .expect("error while running DayMate");

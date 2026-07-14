@@ -13,15 +13,28 @@ const defaultPreferences: Preferences = {
   notifications: false,
   autostart: false,
   floatingBall: true,
-  musicPlatform: "netease",
+  musicCategory: "smart",
+  backgroundOffset: 0,
+  aiEnabled: false,
+  aiProvider: "sensenova",
+  aiBaseUrl: "https://token.sensenova.cn/v1",
+  aiModel: "sensenova-6.7-flash-lite",
 };
 
 interface AppState {
   onboarded: boolean;
   tasks: Task[];
   preferences: Preferences;
-  finishOnboarding: (preferences: Partial<Preferences>, firstTask?: string) => void;
-  addTask: (title: string, minutes: number, priority: Priority, dueDate?: string) => void;
+  finishOnboarding: (
+    preferences: Partial<Preferences>,
+    firstTask?: string,
+  ) => void;
+  addTask: (
+    title: string,
+    minutes: number,
+    priority: Priority,
+    dueDate?: string,
+  ) => void;
   toggleTask: (id: string) => void;
   removeTask: (id: string) => void;
   updatePreferences: (next: Partial<Preferences>) => void;
@@ -74,12 +87,17 @@ export const useAppStore = create<AppState>()(
               ? {
                   ...task,
                   completed: !task.completed,
-                  completedAt: !task.completed ? new Date().toISOString() : undefined,
+                  completedAt: !task.completed
+                    ? new Date().toISOString()
+                    : undefined,
                 }
               : task,
           ),
         })),
-      removeTask: (id) => set((state) => ({ tasks: state.tasks.filter((task) => task.id !== id) })),
+      removeTask: (id) =>
+        set((state) => ({
+          tasks: state.tasks.filter((task) => task.id !== id),
+        })),
       updatePreferences: (next) =>
         set((state) => ({ preferences: { ...state.preferences, ...next } })),
       clearActivityData: () => undefined,
@@ -103,8 +121,12 @@ export function selectNextTask(tasks: Task[]) {
   return [...tasks]
     .filter((task) => !task.completed)
     .sort((a, b) => {
-      const dueA = a.dueDate ? new Date(a.dueDate).getTime() : Number.MAX_SAFE_INTEGER;
-      const dueB = b.dueDate ? new Date(b.dueDate).getTime() : Number.MAX_SAFE_INTEGER;
+      const dueA = a.dueDate
+        ? new Date(a.dueDate).getTime()
+        : Number.MAX_SAFE_INTEGER;
+      const dueB = b.dueDate
+        ? new Date(b.dueDate).getTime()
+        : Number.MAX_SAFE_INTEGER;
       if (dueA !== dueB) return dueA - dueB;
       if (priorityScore[a.priority] !== priorityScore[b.priority]) {
         return priorityScore[b.priority] - priorityScore[a.priority];

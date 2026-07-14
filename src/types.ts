@@ -1,4 +1,5 @@
-export type Page = "today" | "review" | "tasks" | "content" | "privacy" | "settings";
+export type Page =
+  "today" | "review" | "tasks" | "content" | "privacy" | "settings";
 
 export type Priority = "high" | "medium" | "low";
 
@@ -24,12 +25,17 @@ export interface Preferences {
   notifications: boolean;
   autostart: boolean;
   floatingBall: boolean;
-  musicPlatform: "netease" | "qq" | "spotify" | "apple" | "youtube";
+  musicCategory:
+    "smart" | "focus" | "chinese" | "classical" | "ambient" | "electronic";
+  backgroundOffset: number;
+  aiEnabled: boolean;
+  aiProvider: string;
+  aiBaseUrl: string;
+  aiModel: string;
 }
 
 export interface DailyContent {
   quote: { text: string; author: string };
-  music: { title: string; artist: string; scene: string };
   joke: string;
   challenge: string;
 }
