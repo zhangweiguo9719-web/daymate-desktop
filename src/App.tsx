@@ -10,6 +10,8 @@ import {
   Heart,
   Home,
   ListTodo,
+  GripHorizontal,
+  Minimize2,
   Music2,
   Pause,
   Play,
@@ -26,6 +28,8 @@ import { getDailyContent, musicSearchUrl } from "./data/dailyContent";
 import { selectNextTask, useAppStore } from "./store";
 import { deleteNativeActivity, getDataLocation, getTodayStats, setNativeTracking, type TodayStats } from "./native";
 import type { Page, Priority, Task } from "./types";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { hideCompanion, hideMainToCompanion, showMainWindow, startCompanionDragging } from "./windows";
 import "./App.css";
 
 const navItems: { id: Page; label: string; icon: typeof Home }[] = [
@@ -167,16 +171,40 @@ function PrivacyPage() {
 
 function SettingsPage() {
   const { preferences, updatePreferences } = useAppStore();
-  return <div className="page"><header className="page-header"><div><p className="eyebrow">设置</p><h1>把陪伴调成你舒服的样子。</h1><p>所有选择均保存在本机。</p></div></header><section className="settings-card"><h2>通用</h2><label className="setting-row"><div><strong>昵称</strong><span>用于每天的问候</span></div><input className="compact-input" value={preferences.nickname} onChange={(event) => updatePreferences({ nickname: event.target.value })} /></label><label className="setting-row"><div><strong>主题</strong><span>跟随系统或手动指定</span></div><select value={preferences.theme} onChange={(event) => updatePreferences({ theme: event.target.value as typeof preferences.theme })}><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select></label><label className="setting-row"><div><strong>默认音乐平台</strong><span>点击音乐时打开</span></div><select value={preferences.musicPlatform} onChange={(event) => updatePreferences({ musicPlatform: event.target.value as typeof preferences.musicPlatform })}><option value="netease">网易云音乐</option><option value="qq">QQ 音乐</option><option value="spotify">Spotify</option><option value="apple">Apple Music</option><option value="youtube">YouTube Music</option></select></label></section><section className="settings-card"><h2>启动与通知</h2>{([['autostart','开机自动启动','需要你主动开启'],['notifications','桌面通知','任务完成或休息时温和提醒']] as const).map(([key,title,description]) => <label className="setting-row" key={key}><div><strong>{title}</strong><span>{description}</span></div><input type="checkbox" checked={preferences[key]} onChange={(event) => updatePreferences({ [key]: event.target.checked })} /></label>)}</section><section className="settings-card about"><div className="brand-mark">日</div><div><strong>DayMate 日伴</strong><span>版本 0.1.0 · 本地优先桌面陪伴应用</span></div></section></div>;
+  const updateFloatingBall = (enabled: boolean) => {
+    updatePreferences({ floatingBall: enabled });
+    if (!enabled) hideCompanion().catch(() => undefined);
+  };
+  return <div className="page"><header className="page-header"><div><p className="eyebrow">设置</p><h1>把陪伴调成你舒服的样子。</h1><p>所有选择均保存在本机。</p></div></header><section className="settings-card"><h2>通用</h2><label className="setting-row"><div><strong>昵称</strong><span>用于每天的问候</span></div><input className="compact-input" value={preferences.nickname} onChange={(event) => updatePreferences({ nickname: event.target.value })} /></label><label className="setting-row"><div><strong>主题</strong><span>跟随系统或手动指定</span></div><select value={preferences.theme} onChange={(event) => updatePreferences({ theme: event.target.value as typeof preferences.theme })}><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select></label><label className="setting-row"><div><strong>默认音乐平台</strong><span>点击音乐时打开</span></div><select value={preferences.musicPlatform} onChange={(event) => updatePreferences({ musicPlatform: event.target.value as typeof preferences.musicPlatform })}><option value="netease">网易云音乐</option><option value="qq">QQ 音乐</option><option value="spotify">Spotify</option><option value="apple">Apple Music</option><option value="youtube">YouTube Music</option></select></label></section><section className="settings-card"><h2>启动与通知</h2>{([['autostart','开机自动启动','需要你主动开启'],['notifications','桌面通知','任务完成或休息时温和提醒']] as const).map(([key,title,description]) => <label className="setting-row" key={key}><div><strong>{title}</strong><span>{description}</span></div><input type="checkbox" checked={preferences[key]} onChange={(event) => updatePreferences({ [key]: event.target.checked })} /></label>)}<label className="setting-row"><div><strong>桌面浮动球</strong><span>关闭主窗口后保留一个可拖动的快捷入口</span></div><input type="checkbox" checked={preferences.floatingBall} onChange={(event) => updateFloatingBall(event.target.checked)} /></label></section><section className="settings-card about"><div className="brand-mark">日</div><div><strong>DayMate 日伴</strong><span>版本 0.1.0 · 本地优先桌面陪伴应用</span></div></section></div>;
+}
+
+function CompanionBall() {
+  useEffect(() => {
+    document.documentElement.classList.add("companion-mode");
+    return () => document.documentElement.classList.remove("companion-mode");
+  }, []);
+  return <main className="companion-shell" aria-label="DayMate 桌面浮动球"><button className="companion-drag" onMouseDown={() => startCompanionDragging().catch(() => undefined)} aria-label="拖动浮动球"><GripHorizontal size={18} /></button><button className="companion-ball" onClick={() => showMainWindow().catch(() => undefined)} aria-label="打开 DayMate"><span>日</span><i /></button></main>;
 }
 
 export default function App() {
+  const windowLabel = getCurrentWindow().label;
   const onboarded = useAppStore((state) => state.onboarded);
   const theme = useAppStore((state) => state.preferences.theme);
+  const floatingBall = useAppStore((state) => state.preferences.floatingBall);
   const [page, setPage] = useState<Page>('today');
   const [adding, setAdding] = useState(false);
   const [focusTask, setFocusTask] = useState<Task>();
   useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
+  useEffect(() => {
+    if (windowLabel !== "main") return;
+    const current = getCurrentWindow();
+    const unlisten = current.onCloseRequested(async (event) => {
+      event.preventDefault();
+      if (floatingBall) await hideMainToCompanion();
+      else await current.hide();
+    });
+    return () => { unlisten.then((dispose) => dispose()).catch(() => undefined); };
+  }, [floatingBall, windowLabel]);
   const body = useMemo(() => {
     if (page === 'today') return <Dashboard onAdd={() => setAdding(true)} onFocus={setFocusTask} setPage={setPage} />;
     if (page === 'tasks') return <TasksPage onAdd={() => setAdding(true)} onFocus={setFocusTask} />;
@@ -185,6 +213,7 @@ export default function App() {
     if (page === 'privacy') return <PrivacyPage />;
     return <SettingsPage />;
   }, [page]);
+  if (windowLabel === "companion") return <CompanionBall />;
   if (!onboarded) return <Onboarding />;
-  return <div className="app-shell"><aside className="sidebar"><div className="brand"><div className="brand-mark">日</div><div><strong>DayMate</strong><span>日伴</span></div></div><nav>{navItems.map((item) => <button key={item.id} className={page === item.id ? 'active' : ''} onClick={() => setPage(item.id)}><item.icon size={19} /><span>{item.label}</span></button>)}</nav><div className="sidebar-note"><Sparkles size={17} /><p>不用准备好才开始。<br />开始以后，会慢慢准备好的。</p></div></aside><main className="main-content">{body}</main>{adding && <AddTaskModal onClose={() => setAdding(false)} />}{focusTask && <FocusModal task={focusTask} onClose={() => setFocusTask(undefined)} />}</div>;
+  return <div className="app-shell"><aside className="sidebar"><div className="brand"><div className="brand-mark">日</div><div><strong>DayMate</strong><span>日伴</span></div></div><nav>{navItems.map((item) => <button key={item.id} className={page === item.id ? 'active' : ''} onClick={() => setPage(item.id)}><item.icon size={19} /><span>{item.label}</span></button>)}</nav><div className="sidebar-note"><Sparkles size={17} /><p>不用准备好才开始。<br />开始以后，会慢慢准备好的。</p></div>{floatingBall && <button className="collapse-button" onClick={() => hideMainToCompanion().catch(() => undefined)}><Minimize2 size={16} />收起为浮球</button>}</aside><main className="main-content">{body}</main>{adding && <AddTaskModal onClose={() => setAdding(false)} />}{focusTask && <FocusModal task={focusTask} onClose={() => setFocusTask(undefined)} />}</div>;
 }

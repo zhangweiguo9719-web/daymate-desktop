@@ -12,6 +12,7 @@ const defaultPreferences: Preferences = {
   idleDetection: true,
   notifications: false,
   autostart: false,
+  floatingBall: true,
   musicPlatform: "netease",
 };
 
@@ -83,7 +84,17 @@ export const useAppStore = create<AppState>()(
         set((state) => ({ preferences: { ...state.preferences, ...next } })),
       clearActivityData: () => undefined,
     }),
-    { name: "daymate-state-v1" },
+    {
+      name: "daymate-state-v1",
+      merge: (persisted, current) => {
+        const saved = persisted as Partial<AppState>;
+        return {
+          ...current,
+          ...saved,
+          preferences: { ...current.preferences, ...saved.preferences },
+        };
+      },
+    },
   ),
 );
 

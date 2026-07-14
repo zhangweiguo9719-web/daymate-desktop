@@ -17,7 +17,14 @@ DayMate 是一款 Windows 优先、本地优先的桌面陪伴应用。它不是
 - Windows 活动采集后端：前台进程、可选窗口标题、5 分钟空闲排除、60 秒批量落库
 - SQLite 数据库：WAL、迁移记录、会话索引、今日统计查询
 - 系统托盘基础入口
+- 可拖动桌面浮动球：收起主窗口后常驻桌面，点击恢复
 - 深浅主题、本地状态持久化、前端测试、版本一致性检查
+
+## 应用截图
+
+![DayMate 今日主界面](docs/screenshots/daymate-dashboard.png)
+
+![DayMate 桌面浮动球](docs/screenshots/daymate-floating-ball.png)
 
 ## 技术栈
 
@@ -37,6 +44,7 @@ DayMate 是一款 Windows 优先、本地优先的桌面陪伴应用。它不是
 ```text
 React UI
   ├─ 今日 / 任务 / 专注 / 每日内容
+  ├─ 主窗口 / 可拖动桌面浮动球
   ├─ Zustand：任务与用户偏好
   └─ native.ts：唯一 Tauri 调用边界
              │ invoke

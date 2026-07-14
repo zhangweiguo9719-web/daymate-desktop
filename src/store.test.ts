@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { selectNextTask } from "./store";
+import { selectNextTask, useAppStore } from "./store";
 import type { Task } from "./types";
 
 function task(overrides: Partial<Task>): Task {
@@ -30,5 +30,14 @@ describe("selectNextTask", () => {
       task({ title: "较短", estimatedMinutes: 5 }),
     ]);
     expect(result?.title).toBe("较短");
+  });
+});
+
+describe("floating ball preference", () => {
+  it("默认开启并允许用户关闭", () => {
+    expect(useAppStore.getState().preferences.floatingBall).toBe(true);
+    useAppStore.getState().updatePreferences({ floatingBall: false });
+    expect(useAppStore.getState().preferences.floatingBall).toBe(false);
+    useAppStore.getState().updatePreferences({ floatingBall: true });
   });
 });

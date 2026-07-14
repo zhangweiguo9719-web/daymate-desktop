@@ -12,12 +12,27 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "DayMate 日伴",
         "width": 1280,
         "height": 820,
         "minWidth": 980,
         "minHeight": 680,
         "center": true
+      },
+      {
+        "label": "companion",
+        "title": "DayMate 浮动球",
+        "width": 88,
+        "height": 104,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "center": false
       }
     ],
     "security": {

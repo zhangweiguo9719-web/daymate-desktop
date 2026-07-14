@@ -23,6 +23,7 @@ export interface Preferences {
   idleDetection: boolean;
   notifications: boolean;
   autostart: boolean;
+  floatingBall: boolean;
   musicPlatform: "netease" | "qq" | "spotify" | "apple" | "youtube";
 }
 
