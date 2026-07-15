@@ -8,9 +8,9 @@
 
 DayMate 是一款 Windows 优先、本地优先的桌面陪伴应用。它不是企业监控软件，也不是要求用户维护复杂清单的项目管理工具。它只想帮用户看见昨天、选出今天最值得做的一件事，并更轻松地开始。
 
-当前版本：`0.3.1`（MVP 开发版）
+当前版本：`0.3.2`（MVP 开发版）
 
-[⬇️ 直接下载 DayMate 0.3.1 Windows 安装包](https://github.com/zhangweiguo9719-web/daymate-desktop/releases/download/v0.3.1/DayMate_0.3.1_x64-setup.exe) · [查看最新版本](https://github.com/zhangweiguo9719-web/daymate-desktop/releases/latest) · [中文使用手册](USER_GUIDE.md)
+[⬇️ 直接下载 DayMate 0.3.2 Windows 安装包](https://github.com/zhangweiguo9719-web/daymate-desktop/releases/download/v0.3.2/DayMate_0.3.2_x64-setup.exe) · [查看最新版本](https://github.com/zhangweiguo9719-web/daymate-desktop/releases/latest) · [中文使用手册](USER_GUIDE.md)
 
 ## 已实现
 

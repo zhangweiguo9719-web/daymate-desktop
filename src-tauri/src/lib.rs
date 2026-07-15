@@ -70,6 +70,33 @@ struct AiMusicSuggestion {
     reason: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InputKind {
+    Mouse,
+    Keyboard,
+}
+
+fn input_kind(virtual_key: usize) -> Option<InputKind> {
+    match virtual_key {
+        0x01 | 0x02 | 0x04 | 0x05 | 0x06 => Some(InputKind::Mouse),
+        0x07 | 0x10 | 0x11 | 0x12 => None,
+        1..=254 => Some(InputKind::Keyboard),
+        _ => None,
+    }
+}
+
+fn input_press_transition(
+    previous_states: &mut [bool; 256],
+    virtual_key: usize,
+    is_down: bool,
+) -> Option<InputKind> {
+    let was_down = previous_states[virtual_key];
+    previous_states[virtual_key] = is_down;
+    (!was_down && is_down)
+        .then(|| input_kind(virtual_key))
+        .flatten()
+}
+
 fn initialize_database(path: &Path) -> Result<(), String> {
     let connection = Connection::open(path).map_err(|error| error.to_string())?;
     connection
@@ -108,6 +135,14 @@ fn initialize_database(path: &Path) -> Result<(), String> {
                 "ALTER TABLE app_usage_sessions ADD COLUMN mouse_clicks INTEGER NOT NULL DEFAULT 0;
                  ALTER TABLE app_usage_sessions ADD COLUMN key_presses INTEGER NOT NULL DEFAULT 0;
                  INSERT INTO migration_history(version, applied_at) VALUES (2, datetime('now'));",
+            )
+            .map_err(|error| error.to_string())?;
+    }
+    if version < 3 {
+        connection
+            .execute_batch(
+                "UPDATE app_usage_sessions SET key_presses = 0;
+                 INSERT INTO migration_history(version, applied_at) VALUES (3, datetime('now'));",
             )
             .map_err(|error| error.to_string())?;
     }
@@ -219,19 +254,21 @@ fn idle_seconds() -> u64 {
 fn start_input_counter(counters: Arc<InputCounters>) {
     thread::spawn(move || {
         use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+        let mut previous_states = [false; 256];
         loop {
             for virtual_key in 1..=254 {
-                let pressed_since_last_poll = unsafe { GetAsyncKeyState(virtual_key) } & 1 != 0;
-                if !pressed_since_last_poll {
-                    continue;
-                }
-                if virtual_key <= 6 {
-                    counters.mouse_clicks.fetch_add(1, Ordering::Relaxed);
-                } else {
-                    counters.key_presses.fetch_add(1, Ordering::Relaxed);
+                let is_down = unsafe { GetAsyncKeyState(virtual_key as i32) } as u16 & 0x8000 != 0;
+                match input_press_transition(&mut previous_states, virtual_key, is_down) {
+                    Some(InputKind::Mouse) => {
+                        counters.mouse_clicks.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Some(InputKind::Keyboard) => {
+                        counters.key_presses.fetch_add(1, Ordering::Relaxed);
+                    }
+                    None => {}
                 }
             }
-            thread::sleep(Duration::from_millis(50));
+            thread::sleep(Duration::from_millis(20));
         }
     });
 }
@@ -776,8 +813,84 @@ mod tests {
                 row.get(0)
             })
             .expect("read migration version");
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
         drop(statement);
+        drop(connection);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn counts_only_new_keyboard_and_mouse_press_transitions() {
+        let mut states = [false; 256];
+        assert_eq!(
+            input_press_transition(&mut states, 0x41, true),
+            Some(InputKind::Keyboard)
+        );
+        assert_eq!(input_press_transition(&mut states, 0x41, true), None);
+        assert_eq!(input_press_transition(&mut states, 0x41, false), None);
+        assert_eq!(
+            input_press_transition(&mut states, 0x41, true),
+            Some(InputKind::Keyboard)
+        );
+        assert_eq!(
+            input_press_transition(&mut states, 0x01, true),
+            Some(InputKind::Mouse)
+        );
+        assert_eq!(input_press_transition(&mut states, 0x10, true), None);
+        assert_eq!(
+            input_press_transition(&mut states, 0xA0, true),
+            Some(InputKind::Keyboard)
+        );
+    }
+
+    #[test]
+    fn migration_discards_unreliable_keyboard_counts_only() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("daymate-input-reset-{suffix}.sqlite3"));
+        let connection = Connection::open(&path).expect("create v2 database");
+        connection
+            .execute_batch(
+                "CREATE TABLE migration_history (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+                 CREATE TABLE app_usage_sessions (
+                   id INTEGER PRIMARY KEY AUTOINCREMENT,
+                   app_name TEXT NOT NULL,
+                   window_title TEXT,
+                   started_at TEXT NOT NULL,
+                   ended_at TEXT NOT NULL,
+                   active_seconds INTEGER NOT NULL DEFAULT 0,
+                   idle_seconds INTEGER NOT NULL DEFAULT 0,
+                   created_at TEXT NOT NULL,
+                   mouse_clicks INTEGER NOT NULL DEFAULT 0,
+                   key_presses INTEGER NOT NULL DEFAULT 0
+                 );
+                 INSERT INTO migration_history(version, applied_at) VALUES (2, datetime('now'));
+                 INSERT INTO app_usage_sessions
+                   (app_name, started_at, ended_at, created_at, mouse_clicks, key_presses)
+                 VALUES ('test.exe', datetime('now'), datetime('now'), datetime('now'), 42, 999);",
+            )
+            .expect("create v2 schema and data");
+        drop(connection);
+
+        initialize_database(&path).expect("migrate database");
+        let connection = Connection::open(&path).expect("open migrated database");
+        let (mouse_clicks, key_presses): (i64, i64) = connection
+            .query_row(
+                "SELECT mouse_clicks, key_presses FROM app_usage_sessions LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("read migrated input counts");
+        assert_eq!(mouse_clicks, 42);
+        assert_eq!(key_presses, 0);
+        let version: i64 = connection
+            .query_row("SELECT MAX(version) FROM migration_history", [], |row| {
+                row.get(0)
+            })
+            .expect("read migration version");
+        assert_eq!(version, 3);
         drop(connection);
         let _ = std::fs::remove_file(path);
     }
