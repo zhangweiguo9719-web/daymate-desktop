@@ -1,3 +1,5 @@
+import type { MusicPlayMode } from "../types";
+
 export interface SmartTrack {
   id: string;
   title: string;
@@ -21,6 +23,18 @@ export const musicCategories: { id: MusicCategory; label: string }[] = [
   { id: "ambient", label: "自然环境" },
   { id: "electronic", label: "电子节奏" },
 ];
+
+export function nextMusicOffset(
+  mode: MusicPlayMode,
+  random: () => number = Math.random,
+) {
+  return mode === "shuffle" ? 1 + Math.floor(random() * 39) : 1;
+}
+
+export function musicEndAction(mode: MusicPlayMode, autoplay: boolean) {
+  if (mode === "single") return "repeat" as const;
+  return autoplay ? ("next" as const) : ("stop" as const);
+}
 
 const bundledTracks: SmartTrack[] = [
   {

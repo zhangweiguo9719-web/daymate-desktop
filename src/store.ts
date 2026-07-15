@@ -14,6 +14,8 @@ const defaultPreferences: Preferences = {
   autostart: false,
   floatingBall: true,
   musicCategory: "smart",
+  musicAutoplay: true,
+  musicPlayMode: "shuffle",
   backgroundOffset: 0,
   aiEnabled: false,
   aiProvider: "sensenova",

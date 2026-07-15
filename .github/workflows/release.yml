@@ -32,15 +32,15 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: "DayMate ${{ github.ref_name }}"
           releaseBody: |
-            ## DayMate 0.2.0
+            ## DayMate 0.3.0
 
-            - 新增 Audius 在线曲库搜索与应用内播放，不再局限于四首默认音乐。
-            - 支持按场景分类、使用偏好和 AI 建议推荐音乐；切换页面或隐藏窗口时继续播放。
-            - 新增每天自动变化、可手动切换的舒适渐变背景。
-            - 新增商汤、OpenAI、DeepSeek、通义千问、智谱、Moonshot、OpenRouter、Ollama 和自定义接口配置。
-            - API Key 保存到 Windows 凭据管理器，不写入数据库或普通配置。
+            - 音乐播放器新增随机推荐、自动连播和单曲循环。
+            - 音乐播放时，桌面浮动球显示实时律动状态。
+            - 时间回顾新增鼠标点击、键盘按键和最近输入时间；亮屏但无键鼠输入不再误判为活跃。
+            - 托盘与浮动球新增原生右键菜单，可正常显示、隐藏或退出 DayMate。
+            - 修复鼠标经过托盘图标时主窗口意外弹出的问题。
 
-            数据库迁移：无。
+            数据库迁移：活动会话升级到 v2，新增键鼠次数汇总字段，不保存输入内容和鼠标位置。
 
             下载 `setup.exe` 后直接安装，普通用户不需要 Node.js 或 Rust。
           releaseDraft: false

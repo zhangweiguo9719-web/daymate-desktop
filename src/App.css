@@ -225,6 +225,44 @@ nav button.active {
   background: #e6a87f;
   box-shadow: 0 0 0 2px rgba(63, 103, 84, 0.65);
 }
+.companion-ball.music-playing {
+  background: linear-gradient(145deg, #4f8d73, #315b4a);
+  box-shadow:
+    0 13px 30px rgba(43, 77, 59, 0.38),
+    0 0 0 5px rgba(126, 190, 157, 0.16);
+}
+.companion-equalizer {
+  height: 31px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.companion-equalizer b {
+  width: 4px;
+  height: 10px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.92);
+  animation: companion-beat 0.75s ease-in-out infinite alternate;
+}
+.companion-equalizer b:nth-child(2) {
+  animation-delay: -0.45s;
+}
+.companion-equalizer b:nth-child(3) {
+  animation-delay: -0.2s;
+}
+.companion-equalizer b:nth-child(4) {
+  animation-delay: -0.6s;
+}
+@keyframes companion-beat {
+  from {
+    height: 8px;
+    opacity: 0.65;
+  }
+  to {
+    height: 29px;
+    opacity: 1;
+  }
+}
 .page {
   animation: fade 0.25s ease;
 }
@@ -449,6 +487,15 @@ nav button.active {
   flex-direction: column;
   align-items: flex-end;
   gap: 6px;
+}
+.music-mode-buttons {
+  display: flex;
+  gap: 5px;
+}
+.music-mode-buttons .icon-button.active {
+  color: white;
+  background: var(--primary);
+  border-color: var(--primary);
 }
 .source-button {
   max-width: 170px;
@@ -706,6 +753,54 @@ nav button.active {
 }
 .empty-state p {
   font-size: 13px;
+}
+.review-empty {
+  gap: 8px;
+}
+.review-empty-icon {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: linear-gradient(
+    135deg,
+    var(--daily-glow-a, #e8dcc8),
+    var(--daily-glow-b, #d4e4dc)
+  );
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--primary, #5b9e8f);
+  margin-bottom: 8px;
+}
+.review-empty-tip {
+  font-size: 12px;
+  color: var(--muted, #8a857d);
+  max-width: 360px;
+  margin-top: 4px;
+  font-style: italic;
+}
+.input-detection-note {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: -2px 0 18px;
+  padding: 13px 16px;
+  border: 1px solid rgba(79, 125, 102, 0.15);
+  border-radius: 14px;
+  background: rgba(232, 241, 235, 0.68);
+  color: var(--primary-dark);
+}
+.input-detection-note svg {
+  flex: 0 0 auto;
+}
+.input-detection-note strong,
+.input-detection-note span {
+  display: block;
+}
+.input-detection-note span {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
 }
 .date-picker,
 .compact-input,
@@ -1014,6 +1109,22 @@ input:focus {
   font-size: 12px;
   color: var(--muted);
   margin-top: 3px;
+}
+.about-links {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.about-links a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-decoration: none;
+}
+.about-license {
+  font-size: 11px;
+  color: var(--muted);
 }
 .theme-control {
   display: flex;

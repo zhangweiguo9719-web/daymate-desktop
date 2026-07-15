@@ -41,3 +41,11 @@ describe("floating ball preference", () => {
     useAppStore.getState().updatePreferences({ floatingBall: true });
   });
 });
+
+describe("music playback preferences", () => {
+  it("默认开启随机推荐和自动连播", () => {
+    const preferences = useAppStore.getState().preferences;
+    expect(preferences.musicAutoplay).toBe(true);
+    expect(preferences.musicPlayMode).toBe("shuffle");
+  });
+});

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BarChart3,
   BookOpen,
@@ -19,8 +19,10 @@ import {
   Play,
   Plus,
   RotateCcw,
+  Repeat1,
   Settings,
   ShieldCheck,
+  Shuffle,
   Sparkles,
   Trash2,
   X,
@@ -29,6 +31,8 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { getDailyContent } from "./data/dailyContent";
 import {
   musicCategories,
+  musicEndAction,
+  nextMusicOffset,
   recommendMusic,
   type MusicCategory,
   type SmartTrack,
@@ -45,11 +49,13 @@ import {
   recommendMusicWithAi,
   saveAiKey,
   setNativeTracking,
+  showCompanionMenu,
   testAiConnection,
   type TodayStats,
 } from "./native";
 import type { Page, Priority, Task } from "./types";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { emit, listen } from "@tauri-apps/api/event";
 import {
   hideCompanion,
   hideMainToCompanion,
@@ -69,6 +75,12 @@ const navItems: { id: Page; label: string; icon: typeof Home }[] = [
 
 let sharedMusicAudio: HTMLAudioElement | undefined;
 let sharedMusicTrack: SmartTrack | undefined;
+const musicStateKey = "daymate-music-playing";
+
+function publishMusicState(playing: boolean) {
+  localStorage.setItem(musicStateKey, String(playing));
+  emit("music-state", { playing }).catch(() => undefined);
+}
 
 function getSharedMusicAudio() {
   sharedMusicAudio ??= new Audio();
@@ -428,7 +440,13 @@ function SmartMusicPlayer({
   const preferredCategory = useAppStore(
     (state) => state.preferences.musicCategory,
   );
+  const musicAutoplay = useAppStore((state) => state.preferences.musicAutoplay);
+  const musicPlayMode = useAppStore((state) => state.preferences.musicPlayMode);
+  const updatePreferences = useAppStore((state) => state.updatePreferences);
   const firstRecommendation = useRef(true);
+  const pendingAutoplay = useRef(false);
+  const autoplayRef = useRef(musicAutoplay);
+  const playModeRef = useRef(musicPlayMode);
   const [offset, setOffset] = useState(0);
   const [track, setTrack] = useState<SmartTrack | undefined>(sharedMusicTrack);
   const [loading, setLoading] = useState(!sharedMusicTrack);
@@ -442,18 +460,40 @@ function SmartMusicPlayer({
   const [duration, setDuration] = useState(sharedMusicAudio?.duration ?? 0);
 
   useEffect(() => {
+    autoplayRef.current = musicAutoplay;
+    playModeRef.current = musicPlayMode;
+  }, [musicAutoplay, musicPlayMode]);
+
+  useEffect(() => {
     const audio = getSharedMusicAudio();
     const syncTime = () => setCurrentTime(audio.currentTime);
     const syncDuration = () => setDuration(audio.duration);
-    const markPlaying = () => setPlaying(true);
-    const markPaused = () => setPlaying(false);
+    const markPlaying = () => {
+      setPlaying(true);
+      publishMusicState(true);
+    };
+    const markPaused = () => {
+      setPlaying(false);
+      publishMusicState(false);
+    };
     const playNext = () => {
+      const action = musicEndAction(playModeRef.current, autoplayRef.current);
+      if (action === "repeat") {
+        audio.currentTime = 0;
+        audio.play().catch(() => publishMusicState(false));
+        return;
+      }
+      if (action === "stop") {
+        publishMusicState(false);
+        return;
+      }
+      pendingAutoplay.current = true;
       setLoading(true);
       setError("");
       setPlaying(false);
       setCurrentTime(0);
       setDuration(0);
-      setOffset((value) => value + 1);
+      setOffset((value) => value + nextMusicOffset(playModeRef.current));
     };
     audio.addEventListener("timeupdate", syncTime);
     audio.addEventListener("loadedmetadata", syncDuration);
@@ -486,8 +526,10 @@ function SmartMusicPlayer({
       category ?? preferredCategory,
       search,
     )
-      .then((next) => {
+      .then(async (next) => {
         if (!active) return;
+        const resumePlayback = pendingAutoplay.current;
+        pendingAutoplay.current = false;
         audio.pause();
         if (audio.src !== new URL(next.audioUrl, window.location.href).href) {
           audio.src = next.audioUrl;
@@ -497,6 +539,13 @@ function SmartMusicPlayer({
         setCurrentTime(0);
         setDuration(0);
         setTrack(next);
+        if (resumePlayback) {
+          try {
+            await audio.play();
+          } catch {
+            setError("下一首加载完成，但自动播放被系统阻止，请点击播放。");
+          }
+        }
       })
       .catch((reason: unknown) => {
         if (active)
@@ -534,13 +583,15 @@ function SmartMusicPlayer({
   };
 
   const nextTrack = () => {
-    getSharedMusicAudio().pause();
+    const audio = getSharedMusicAudio();
+    pendingAutoplay.current = !audio.paused;
+    audio.pause();
     setLoading(true);
     setError("");
     setPlaying(false);
     setCurrentTime(0);
     setDuration(0);
-    setOffset((value) => value + 1);
+    setOffset((value) => value + nextMusicOffset(musicPlayMode));
   };
   if (loading)
     return (
@@ -592,7 +643,51 @@ function SmartMusicPlayer({
         />
       </div>
       <div className="music-tools">
-        <button className="icon-button" onClick={nextTrack} aria-label="换一首">
+        <div className="music-mode-buttons">
+          <button
+            className={`icon-button ${musicAutoplay ? "active" : ""}`}
+            onClick={() => updatePreferences({ musicAutoplay: !musicAutoplay })}
+            aria-label={musicAutoplay ? "关闭自动连播" : "开启自动连播"}
+            aria-pressed={musicAutoplay}
+            title="自动连播"
+          >
+            <Play size={15} />
+          </button>
+          <button
+            className={`icon-button ${musicPlayMode === "shuffle" ? "active" : ""}`}
+            onClick={() =>
+              updatePreferences({
+                musicPlayMode:
+                  musicPlayMode === "shuffle" ? "sequence" : "shuffle",
+              })
+            }
+            aria-label="随机推荐"
+            aria-pressed={musicPlayMode === "shuffle"}
+            title="随机推荐"
+          >
+            <Shuffle size={15} />
+          </button>
+          <button
+            className={`icon-button ${musicPlayMode === "single" ? "active" : ""}`}
+            onClick={() =>
+              updatePreferences({
+                musicPlayMode:
+                  musicPlayMode === "single" ? "sequence" : "single",
+              })
+            }
+            aria-label="单曲循环"
+            aria-pressed={musicPlayMode === "single"}
+            title="单曲循环"
+          >
+            <Repeat1 size={15} />
+          </button>
+        </div>
+        <button
+          className="icon-button"
+          onClick={nextTrack}
+          aria-label="换一首"
+          title="换一首"
+        >
           <RotateCcw size={16} />
         </button>
         {!compact && (
@@ -792,14 +887,28 @@ function ReviewPage() {
     activeSeconds: 0,
     idleSeconds: 0,
     appSwitches: 0,
+    mouseClicks: 0,
+    keyPresses: 0,
+    lastInputSecondsAgo: 0,
     topApps: [],
   });
   useEffect(() => {
-    getTodayStats()
-      .then(setStats)
-      .catch(() => undefined);
+    const refresh = () => {
+      getTodayStats()
+        .then(setStats)
+        .catch(() => undefined);
+    };
+    refresh();
+    const interval = window.setInterval(refresh, 3_000);
+    return () => window.clearInterval(interval);
   }, []);
   const minutes = (seconds: number) => `${Math.floor(seconds / 60)} 分钟`;
+  const lastInput =
+    stats.lastInputSecondsAgo < 5
+      ? "刚刚"
+      : stats.lastInputSecondsAgo < 60
+        ? `${stats.lastInputSecondsAgo} 秒前`
+        : `${Math.floor(stats.lastInputSecondsAgo / 60)} 分钟前`;
   return (
     <div className="page">
       <header className="page-header">
@@ -818,6 +927,9 @@ function ReviewPage() {
         {[
           ["电脑活跃", minutes(stats.activeSeconds)],
           ["当前应用", stats.currentApp ?? "等待数据"],
+          ["最近键鼠输入", lastInput],
+          ["鼠标点击", `${stats.mouseClicks} 次`],
+          ["键盘按键", `${stats.keyPresses} 次`],
           ["离开电脑", minutes(stats.idleSeconds)],
           ["应用切换", `${stats.appSwitches} 次`],
         ].map(([label, value]) => (
@@ -827,6 +939,16 @@ function ReviewPage() {
             <small>今日本机数据</small>
           </article>
         ))}
+      </section>
+      <section className="input-detection-note">
+        <ShieldCheck size={18} />
+        <div>
+          <strong>活跃时间由键盘和鼠标输入共同确认</strong>
+          <span>
+            连续 5
+            分钟没有任何输入后，保持亮屏不再计入电脑活跃时间。只保存次数，不记录按键内容或鼠标位置。
+          </span>
+        </div>
       </section>
       <section className="card timeline">
         <div className="card-heading">
@@ -846,10 +968,15 @@ function ReviewPage() {
             ))}
           </div>
         ) : (
-          <div className="empty-state">
-            <BarChart3 />
-            <h2>还没有可展示的活动</h2>
-            <p>保持“应用活动记录”开启，使用一分钟后再回来看看。</p>
+          <div className="empty-state review-empty">
+            <div className="review-empty-icon">
+              <BarChart3 />
+            </div>
+            <h2>今天还没留下足迹</h2>
+            <p>应用活动记录正在后台安静工作，使用电脑一段时间后再回来看看。</p>
+            <span className="review-empty-tip">
+              不用刻意记录，正常使用就好。DayMate 只关心节奏，不关心你在做什么。
+            </span>
           </div>
         )}
       </section>
@@ -1040,7 +1167,7 @@ function PrivacyPage() {
       .catch(() => setLocation("暂时无法读取数据位置"));
   }, []);
   const toggles = [
-    ["trackActivity", "应用活动记录", "只统计应用名称、类别和活跃时长"],
+    ["trackActivity", "应用活动记录", "统计应用时长及键鼠次数，不记录输入内容"],
     ["trackWindowTitles", "窗口标题记录", "可能包含文件名，默认关闭"],
     ["idleDetection", "空闲状态检测", "离开电脑后不把时间计入应用"],
   ] as const;
@@ -1050,9 +1177,11 @@ function PrivacyPage() {
   ) => {
     const next = { ...preferences, [key]: checked };
     updatePreferences({ [key]: checked });
-    setNativeTracking(next.trackActivity, next.trackWindowTitles).catch(
-      () => undefined,
-    );
+    setNativeTracking(
+      next.trackActivity,
+      next.trackWindowTitles,
+      next.idleDetection,
+    ).catch(() => undefined);
   };
   const clearData = async () => {
     if (!window.confirm("确定删除全部活动记录吗？此操作不可撤销。")) return;
@@ -1064,7 +1193,9 @@ function PrivacyPage() {
         <div>
           <p className="eyebrow">数据与隐私</p>
           <h1>你始终拥有控制权。</h1>
-          <p>DayMate 不记录键盘输入、不截屏、不读取聊天或文档正文。</p>
+          <p>
+            DayMate 只统计键鼠次数，不记录具体按键、鼠标位置、聊天或文档正文。
+          </p>
         </div>
         <div className="privacy-badge">
           <ShieldCheck />
@@ -1439,7 +1570,21 @@ function SettingsPage() {
         <div className="brand-mark">日</div>
         <div>
           <strong>DayMate 日伴</strong>
-          <span>版本 0.2.0 · 本地优先桌面陪伴应用</span>
+          <span>版本 0.3.0 · 本地优先桌面陪伴应用</span>
+        </div>
+        <div className="about-links">
+          <a
+            href="https://github.com/zhangweiguo9719-web/daymate-desktop"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="button secondary"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
+            </svg>
+            GitHub 仓库
+          </a>
+          <span className="about-license">MIT 开源协议</span>
         </div>
       </section>
     </div>
@@ -1447,25 +1592,67 @@ function SettingsPage() {
 }
 
 function CompanionBall() {
+  const [musicPlaying, setMusicPlaying] = useState(
+    localStorage.getItem(musicStateKey) === "true",
+  );
   useEffect(() => {
     document.documentElement.classList.add("companion-mode");
     return () => document.documentElement.classList.remove("companion-mode");
   }, []);
+  useEffect(() => {
+    const unlisten = listen<{ playing: boolean }>("music-state", (event) => {
+      setMusicPlaying(event.payload.playing);
+    });
+    const syncStorage = (event: StorageEvent) => {
+      if (event.key === musicStateKey)
+        setMusicPlaying(event.newValue === "true");
+    };
+    window.addEventListener("storage", syncStorage);
+    return () => {
+      unlisten.then((dispose) => dispose()).catch(() => undefined);
+      window.removeEventListener("storage", syncStorage);
+    };
+  }, []);
+
+  const handleContextMenu = useCallback((event: React.MouseEvent) => {
+    event.preventDefault();
+    showCompanionMenu().catch(() => undefined);
+  }, []);
+
   return (
-    <main className="companion-shell" aria-label="DayMate 桌面浮动球">
+    <main
+      className="companion-shell"
+      aria-label="DayMate 桌面浮动球"
+      onContextMenu={(event) => event.preventDefault()}
+      onMouseDown={(event) => {
+        if (event.button === 2) handleContextMenu(event);
+      }}
+    >
       <button
         className="companion-drag"
-        onMouseDown={() => startCompanionDragging().catch(() => undefined)}
+        onMouseDown={(event) => {
+          if (event.button === 0)
+            startCompanionDragging().catch(() => undefined);
+        }}
         aria-label="拖动浮动球"
       >
         <GripHorizontal size={18} />
       </button>
       <button
-        className="companion-ball"
+        className={`companion-ball ${musicPlaying ? "music-playing" : ""}`}
         onClick={() => showMainWindow().catch(() => undefined)}
         aria-label="打开 DayMate"
       >
-        <span>日</span>
+        {musicPlaying ? (
+          <span className="companion-equalizer" aria-label="音乐正在播放">
+            <b />
+            <b />
+            <b />
+            <b />
+          </span>
+        ) : (
+          <span>日</span>
+        )}
         <i />
       </button>
     </main>
@@ -1480,6 +1667,11 @@ export default function App() {
     (state) => state.preferences.backgroundOffset,
   );
   const floatingBall = useAppStore((state) => state.preferences.floatingBall);
+  const trackActivity = useAppStore((state) => state.preferences.trackActivity);
+  const trackWindowTitles = useAppStore(
+    (state) => state.preferences.trackWindowTitles,
+  );
+  const idleDetection = useAppStore((state) => state.preferences.idleDetection);
   const [page, setPage] = useState<Page>("today");
   const [adding, setAdding] = useState(false);
   const [focusTask, setFocusTask] = useState<Task>();
@@ -1506,6 +1698,12 @@ export default function App() {
       unlisten.then((dispose) => dispose()).catch(() => undefined);
     };
   }, [floatingBall, windowLabel]);
+  useEffect(() => {
+    if (windowLabel !== "main") return;
+    setNativeTracking(trackActivity, trackWindowTitles, idleDetection).catch(
+      () => undefined,
+    );
+  }, [idleDetection, trackActivity, trackWindowTitles, windowLabel]);
   const body = useMemo(() => {
     if (page === "today")
       return (

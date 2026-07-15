@@ -4,13 +4,17 @@ use serde::{Deserialize, Serialize};
 use std::{
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
     thread,
     time::{Duration, Instant},
 };
-use tauri::{tray::TrayIconBuilder, Manager, State};
+use tauri::{
+    menu::{ContextMenu, MenuBuilder, MenuItemBuilder},
+    tray::TrayIconBuilder,
+    Manager, State,
+};
 
 const AI_KEYRING_SERVICE: &str = "com.daymate.desktop.ai";
 
@@ -18,7 +22,17 @@ struct AppState {
     database_path: PathBuf,
     tracking_enabled: Arc<AtomicBool>,
     title_capture_enabled: Arc<AtomicBool>,
+    idle_detection_enabled: Arc<AtomicBool>,
     reset_requested: Arc<AtomicBool>,
+    input_counters: Arc<InputCounters>,
+}
+
+#[derive(Default)]
+struct InputCounters {
+    mouse_clicks: AtomicU64,
+    key_presses: AtomicU64,
+    pending_mouse_clicks: AtomicU64,
+    pending_key_presses: AtomicU64,
 }
 
 #[derive(Serialize)]
@@ -27,6 +41,9 @@ struct TodayStats {
     active_seconds: i64,
     idle_seconds: i64,
     app_switches: i64,
+    mouse_clicks: i64,
+    key_presses: i64,
+    last_input_seconds_ago: i64,
     current_app: Option<String>,
     top_apps: Vec<AppUsage>,
 }
@@ -36,6 +53,14 @@ struct TodayStats {
 struct AppUsage {
     app_name: String,
     seconds: i64,
+}
+
+#[derive(Clone, Copy)]
+struct SessionMetrics {
+    active_seconds: i64,
+    idle_seconds: i64,
+    mouse_clicks: i64,
+    key_presses: i64,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -69,7 +94,24 @@ fn initialize_database(path: &Path) -> Result<(), String> {
              CREATE INDEX IF NOT EXISTS idx_usage_app_name ON app_usage_sessions(app_name);
              INSERT OR IGNORE INTO migration_history(version, applied_at) VALUES (1, datetime('now'));",
         )
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    let version: i64 = connection
+        .query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM migration_history",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    if version < 2 {
+        connection
+            .execute_batch(
+                "ALTER TABLE app_usage_sessions ADD COLUMN mouse_clicks INTEGER NOT NULL DEFAULT 0;
+                 ALTER TABLE app_usage_sessions ADD COLUMN key_presses INTEGER NOT NULL DEFAULT 0;
+                 INSERT INTO migration_history(version, applied_at) VALUES (2, datetime('now'));",
+            )
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 fn save_session(
@@ -78,24 +120,30 @@ fn save_session(
     window_title: Option<&str>,
     started_at: DateTime<Utc>,
     ended_at: DateTime<Utc>,
-    active_seconds: i64,
-    idle_seconds: i64,
+    metrics: SessionMetrics,
 ) {
-    if active_seconds == 0 && idle_seconds == 0 {
+    if metrics.active_seconds == 0
+        && metrics.idle_seconds == 0
+        && metrics.mouse_clicks == 0
+        && metrics.key_presses == 0
+    {
         return;
     }
     if let Ok(connection) = Connection::open(path) {
         let _ = connection.execute(
             "INSERT INTO app_usage_sessions
-             (app_name, window_title, started_at, ended_at, active_seconds, idle_seconds, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?4)",
+             (app_name, window_title, started_at, ended_at, active_seconds, idle_seconds,
+              mouse_clicks, key_presses, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?4)",
             params![
                 app_name,
                 window_title,
                 started_at.to_rfc3339(),
                 ended_at.to_rfc3339(),
-                active_seconds,
-                idle_seconds,
+                metrics.active_seconds,
+                metrics.idle_seconds,
+                metrics.mouse_clicks,
+                metrics.key_presses,
             ],
         );
     }
@@ -167,6 +215,30 @@ fn idle_seconds() -> u64 {
     }
 }
 
+#[cfg(windows)]
+fn start_input_counter(counters: Arc<InputCounters>) {
+    thread::spawn(move || {
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+        loop {
+            for virtual_key in 1..=254 {
+                let pressed_since_last_poll = unsafe { GetAsyncKeyState(virtual_key) } & 1 != 0;
+                if !pressed_since_last_poll {
+                    continue;
+                }
+                if virtual_key <= 6 {
+                    counters.mouse_clicks.fetch_add(1, Ordering::Relaxed);
+                } else {
+                    counters.key_presses.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+    });
+}
+
+#[cfg(not(windows))]
+fn start_input_counter(_counters: Arc<InputCounters>) {}
+
 #[cfg(not(windows))]
 fn idle_seconds() -> u64 {
     0
@@ -176,7 +248,9 @@ fn start_activity_tracker(state: &AppState) {
     let database_path = state.database_path.clone();
     let tracking_enabled = state.tracking_enabled.clone();
     let title_capture_enabled = state.title_capture_enabled.clone();
+    let idle_detection_enabled = state.idle_detection_enabled.clone();
     let reset_requested = state.reset_requested.clone();
+    let input_counters = state.input_counters.clone();
     thread::spawn(move || {
         let mut current_app = String::new();
         let mut current_title: Option<String> = None;
@@ -184,6 +258,10 @@ fn start_activity_tracker(state: &AppState) {
         let mut last_flush = Instant::now();
         let mut active_seconds = 0i64;
         let mut inactive_seconds = 0i64;
+        let mut mouse_clicks = 0i64;
+        let mut key_presses = 0i64;
+        let mut previous_mouse_clicks = input_counters.mouse_clicks.load(Ordering::Relaxed);
+        let mut previous_key_presses = input_counters.key_presses.load(Ordering::Relaxed);
         let mut current_day = Local::now().date_naive();
 
         loop {
@@ -193,18 +271,38 @@ fn start_activity_tracker(state: &AppState) {
                 current_title = None;
                 active_seconds = 0;
                 inactive_seconds = 0;
+                mouse_clicks = 0;
+                key_presses = 0;
+                input_counters
+                    .pending_mouse_clicks
+                    .store(0, Ordering::Relaxed);
+                input_counters
+                    .pending_key_presses
+                    .store(0, Ordering::Relaxed);
                 started_at = Utc::now();
                 last_flush = Instant::now();
                 current_day = Local::now().date_naive();
             }
+            let total_mouse_clicks = input_counters.mouse_clicks.load(Ordering::Relaxed);
+            let total_key_presses = input_counters.key_presses.load(Ordering::Relaxed);
+            let mouse_delta = total_mouse_clicks.saturating_sub(previous_mouse_clicks) as i64;
+            let key_delta = total_key_presses.saturating_sub(previous_key_presses) as i64;
+            previous_mouse_clicks = total_mouse_clicks;
+            previous_key_presses = total_key_presses;
             if !tracking_enabled.load(Ordering::Relaxed) {
+                input_counters
+                    .pending_mouse_clicks
+                    .store(0, Ordering::Relaxed);
+                input_counters
+                    .pending_key_presses
+                    .store(0, Ordering::Relaxed);
                 continue;
             }
             let capture_title = title_capture_enabled.load(Ordering::Relaxed);
             let Some((app_name, title)) = foreground_application(capture_title) else {
                 continue;
             };
-            let is_idle = idle_seconds() >= 300;
+            let is_idle = idle_detection_enabled.load(Ordering::Relaxed) && idle_seconds() >= 300;
             let day_changed = Local::now().date_naive() != current_day;
             let app_changed = app_name != current_app || (capture_title && title != current_title);
             if (!current_app.is_empty() && app_changed)
@@ -217,14 +315,26 @@ fn start_activity_tracker(state: &AppState) {
                     current_title.as_deref(),
                     started_at,
                     Utc::now(),
-                    active_seconds,
-                    inactive_seconds,
+                    SessionMetrics {
+                        active_seconds,
+                        idle_seconds: inactive_seconds,
+                        mouse_clicks,
+                        key_presses,
+                    },
                 );
                 current_app = app_name.clone();
                 current_title = title.clone();
                 started_at = Utc::now();
                 active_seconds = 0;
                 inactive_seconds = 0;
+                mouse_clicks = 0;
+                key_presses = 0;
+                input_counters
+                    .pending_mouse_clicks
+                    .store(0, Ordering::Relaxed);
+                input_counters
+                    .pending_key_presses
+                    .store(0, Ordering::Relaxed);
                 last_flush = Instant::now();
                 current_day = Local::now().date_naive();
             }
@@ -238,16 +348,32 @@ fn start_activity_tracker(state: &AppState) {
             } else if !current_app.eq_ignore_ascii_case("daymate-desktop.exe") {
                 active_seconds += 3;
             }
+            mouse_clicks += mouse_delta;
+            key_presses += key_delta;
+            input_counters
+                .pending_mouse_clicks
+                .store(mouse_clicks as u64, Ordering::Relaxed);
+            input_counters
+                .pending_key_presses
+                .store(key_presses as u64, Ordering::Relaxed);
         }
     });
 }
 
 #[tauri::command]
-fn set_tracking(state: State<'_, AppState>, enabled: bool, include_titles: bool) {
+fn set_tracking(
+    state: State<'_, AppState>,
+    enabled: bool,
+    include_titles: bool,
+    detect_idle: bool,
+) {
     state.tracking_enabled.store(enabled, Ordering::Relaxed);
     state
         .title_capture_enabled
         .store(include_titles, Ordering::Relaxed);
+    state
+        .idle_detection_enabled
+        .store(detect_idle, Ordering::Relaxed);
 }
 
 #[tauri::command]
@@ -262,14 +388,29 @@ fn get_today_stats(state: State<'_, AppState>) -> Result<TodayStats, String> {
         .expect("valid local date")
         .with_timezone(&Utc)
         .to_rfc3339();
-    let (active_seconds, idle_seconds, app_switches) = connection
-        .query_row(
-            "SELECT COALESCE(SUM(active_seconds), 0), COALESCE(SUM(idle_seconds), 0), COUNT(*)
+    let (
+        active_seconds,
+        idle_seconds_total,
+        app_switches,
+        stored_mouse_clicks,
+        stored_key_presses,
+    ): (i64, i64, i64, i64, i64) = connection
+            .query_row(
+                "SELECT COALESCE(SUM(active_seconds), 0), COALESCE(SUM(idle_seconds), 0), COUNT(*),
+                    COALESCE(SUM(mouse_clicks), 0), COALESCE(SUM(key_presses), 0)
              FROM app_usage_sessions WHERE started_at >= ?1",
-            [&start],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .map_err(|error| error.to_string())?;
+                [&start],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .map_err(|error| error.to_string())?;
     let mut statement = connection
         .prepare(
             "SELECT app_name, SUM(active_seconds) AS seconds FROM app_usage_sessions
@@ -287,10 +428,23 @@ fn get_today_stats(state: State<'_, AppState>) -> Result<TodayStats, String> {
         .filter_map(Result::ok)
         .collect();
     let current_app = foreground_application(false).map(|value| value.0);
+    let mouse_clicks = stored_mouse_clicks
+        + state
+            .input_counters
+            .pending_mouse_clicks
+            .load(Ordering::Relaxed) as i64;
+    let key_presses = stored_key_presses
+        + state
+            .input_counters
+            .pending_key_presses
+            .load(Ordering::Relaxed) as i64;
     Ok(TodayStats {
         active_seconds,
-        idle_seconds,
+        idle_seconds: idle_seconds_total,
         app_switches,
+        mouse_clicks,
+        key_presses,
+        last_input_seconds_ago: idle_seconds() as i64,
         current_app,
         top_apps,
     })
@@ -308,6 +462,27 @@ fn delete_activity_data(state: State<'_, AppState>) -> Result<(), String> {
 #[tauri::command]
 fn data_location(state: State<'_, AppState>) -> String {
     state.database_path.display().to_string()
+}
+
+#[tauri::command]
+fn show_companion_menu(app: tauri::AppHandle, window: tauri::Window) -> Result<(), String> {
+    let show_item = MenuItemBuilder::with_id("show", "显示主窗口")
+        .build(&app)
+        .map_err(|error| error.to_string())?;
+    let hide_item = MenuItemBuilder::with_id("hide_companion", "隐藏浮动球")
+        .build(&app)
+        .map_err(|error| error.to_string())?;
+    let quit_item = MenuItemBuilder::with_id("quit", "退出 DayMate")
+        .build(&app)
+        .map_err(|error| error.to_string())?;
+    let menu = MenuBuilder::new(&app)
+        .item(&show_item)
+        .item(&hide_item)
+        .separator()
+        .item(&quit_item)
+        .build()
+        .map_err(|error| error.to_string())?;
+    menu.popup(window).map_err(|error| error.to_string())
 }
 
 fn ai_key_entry(provider: &str) -> Result<keyring::Entry, String> {
@@ -472,20 +647,59 @@ pub fn run() {
                 database_path,
                 tracking_enabled: Arc::new(AtomicBool::new(true)),
                 title_capture_enabled: Arc::new(AtomicBool::new(false)),
+                idle_detection_enabled: Arc::new(AtomicBool::new(true)),
                 reset_requested: Arc::new(AtomicBool::new(false)),
+                input_counters: Arc::new(InputCounters::default()),
             };
+            start_input_counter(state.input_counters.clone());
             start_activity_tracker(&state);
             app.manage(state);
 
-            let mut tray = TrayIconBuilder::new().tooltip("DayMate 日伴");
+            let show_item = MenuItemBuilder::with_id("show", "显示主窗口").build(app)?;
+            let quit_item = MenuItemBuilder::with_id("quit", "退出 DayMate").build(app)?;
+            let menu = MenuBuilder::new(app)
+                .item(&show_item)
+                .separator()
+                .item(&quit_item)
+                .build()?;
+
+            let mut tray = TrayIconBuilder::new()
+                .tooltip("DayMate 日伴")
+                .menu(&menu)
+                .show_menu_on_left_click(false);
             if let Some(icon) = app.default_window_icon() {
                 tray = tray.icon(icon.clone());
             }
-            tray.on_tray_icon_event(|tray, _| {
-                if let Some(window) = tray.app_handle().get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
+            tray.on_tray_icon_event(|tray, event| {
+                use tauri::tray::TrayIconEvent;
+                if let TrayIconEvent::Click {
+                    button: tauri::tray::MouseButton::Left,
+                    button_state: tauri::tray::MouseButtonState::Up,
+                    ..
+                } = event
+                {
+                    if let Some(window) = tray.app_handle().get_webview_window("main") {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
                 }
+            })
+            .on_menu_event(|app, event| match event.id().as_ref() {
+                "show" => {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+                }
+                "quit" => {
+                    app.exit(0);
+                }
+                "hide_companion" => {
+                    if let Some(window) = app.get_webview_window("companion") {
+                        let _ = window.hide();
+                    }
+                }
+                _ => {}
             })
             .build(app)?;
             Ok(())
@@ -495,6 +709,7 @@ pub fn run() {
             get_today_stats,
             delete_activity_data,
             data_location,
+            show_companion_menu,
             save_ai_key,
             has_ai_key,
             delete_ai_key,
@@ -503,4 +718,59 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running DayMate");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn migrates_existing_activity_database_to_input_metrics() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("daymate-migration-{suffix}.sqlite3"));
+        let connection = Connection::open(&path).expect("create test database");
+        connection
+            .execute_batch(
+                "CREATE TABLE migration_history (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+                 CREATE TABLE app_usage_sessions (
+                   id INTEGER PRIMARY KEY AUTOINCREMENT,
+                   app_name TEXT NOT NULL,
+                   window_title TEXT,
+                   started_at TEXT NOT NULL,
+                   ended_at TEXT NOT NULL,
+                   active_seconds INTEGER NOT NULL DEFAULT 0,
+                   idle_seconds INTEGER NOT NULL DEFAULT 0,
+                   created_at TEXT NOT NULL
+                 );
+                 INSERT INTO migration_history(version, applied_at) VALUES (1, datetime('now'));",
+            )
+            .expect("create v1 schema");
+        drop(connection);
+
+        initialize_database(&path).expect("migrate database");
+        let connection = Connection::open(&path).expect("open migrated database");
+        let mut statement = connection
+            .prepare("PRAGMA table_info(app_usage_sessions)")
+            .expect("read columns");
+        let columns: Vec<String> = statement
+            .query_map([], |row| row.get(1))
+            .expect("query columns")
+            .filter_map(Result::ok)
+            .collect();
+        assert!(columns.contains(&"mouse_clicks".to_string()));
+        assert!(columns.contains(&"key_presses".to_string()));
+        let version: i64 = connection
+            .query_row("SELECT MAX(version) FROM migration_history", [], |row| {
+                row.get(0)
+            })
+            .expect("read migration version");
+        assert_eq!(version, 2);
+        drop(statement);
+        drop(connection);
+        let _ = std::fs::remove_file(path);
+    }
 }

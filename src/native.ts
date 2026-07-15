@@ -4,6 +4,9 @@ export interface TodayStats {
   activeSeconds: number;
   idleSeconds: number;
   appSwitches: number;
+  mouseClicks: number;
+  keyPresses: number;
+  lastInputSecondsAgo: number;
   currentApp?: string;
   topApps: { appName: string; seconds: number }[];
 }
@@ -12,6 +15,9 @@ const emptyStats: TodayStats = {
   activeSeconds: 0,
   idleSeconds: 0,
   appSwitches: 0,
+  mouseClicks: 0,
+  keyPresses: 0,
+  lastInputSecondsAgo: 0,
   topApps: [],
 };
 
@@ -27,8 +33,10 @@ export async function getTodayStats() {
 export async function setNativeTracking(
   enabled: boolean,
   includeTitles: boolean,
+  detectIdle: boolean,
 ) {
-  if (isDesktop()) await invoke("set_tracking", { enabled, includeTitles });
+  if (isDesktop())
+    await invoke("set_tracking", { enabled, includeTitles, detectIdle });
 }
 
 export async function deleteNativeActivity() {
@@ -38,6 +46,10 @@ export async function deleteNativeActivity() {
 export async function getDataLocation() {
   if (!isDesktop()) return "浏览器预览模式不会创建活动数据库";
   return invoke<string>("data_location");
+}
+
+export async function showCompanionMenu() {
+  if (isDesktop()) await invoke("show_companion_menu");
 }
 
 export async function saveAiKey(provider: string, apiKey: string) {

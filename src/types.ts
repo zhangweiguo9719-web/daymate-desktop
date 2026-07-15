@@ -2,6 +2,7 @@ export type Page =
   "today" | "review" | "tasks" | "content" | "privacy" | "settings";
 
 export type Priority = "high" | "medium" | "low";
+export type MusicPlayMode = "sequence" | "shuffle" | "single";
 
 export interface Task {
   id: string;
@@ -27,6 +28,8 @@ export interface Preferences {
   floatingBall: boolean;
   musicCategory:
     "smart" | "focus" | "chinese" | "classical" | "ambient" | "electronic";
+  musicAutoplay: boolean;
+  musicPlayMode: MusicPlayMode;
   backgroundOffset: number;
   aiEnabled: boolean;
   aiProvider: string;
