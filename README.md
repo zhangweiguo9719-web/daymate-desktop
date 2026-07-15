@@ -10,6 +10,8 @@ DayMate 是一款 Windows 优先、本地优先的桌面陪伴应用。它不是
 
 当前版本：`0.3.0`（MVP 开发版）
 
+[⬇️ 直接下载 DayMate 0.3.0 Windows 安装包](https://github.com/zhangweiguo9719-web/daymate-desktop/releases/download/v0.3.0/DayMate_0.3.0_x64-setup.exe) · [查看最新版本](https://github.com/zhangweiguo9719-web/daymate-desktop/releases/latest) · [中文使用手册](USER_GUIDE.md)
+
 ## 已实现
 
 - 五步首次引导：昵称、身份、陪伴语气、隐私说明、第一项任务
