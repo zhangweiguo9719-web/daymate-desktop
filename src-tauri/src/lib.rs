@@ -485,6 +485,17 @@ fn show_companion_menu(app: tauri::AppHandle, window: tauri::Window) -> Result<(
     menu.popup(window).map_err(|error| error.to_string())
 }
 
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(companion) = app.get_webview_window("companion") {
+        let _ = companion.hide();
+    }
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.show();
+        let _ = main.unminimize();
+        let _ = main.set_focus();
+    }
+}
+
 fn ai_key_entry(provider: &str) -> Result<keyring::Entry, String> {
     if provider.is_empty()
         || !provider.chars().all(|character| {
@@ -635,6 +646,9 @@ fn recommend_music_with_ai(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_main_window(app);
+        }))
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let data_dir = std::env::var_os("DAYMATE_DATA_DIR")
@@ -678,18 +692,12 @@ pub fn run() {
                     ..
                 } = event
                 {
-                    if let Some(window) = tray.app_handle().get_webview_window("main") {
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                    }
+                    show_main_window(tray.app_handle());
                 }
             })
             .on_menu_event(|app, event| match event.id().as_ref() {
                 "show" => {
-                    if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                    }
+                    show_main_window(app);
                 }
                 "quit" => {
                     app.exit(0);

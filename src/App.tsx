@@ -1570,7 +1570,7 @@ function SettingsPage() {
         <div className="brand-mark">日</div>
         <div>
           <strong>DayMate 日伴</strong>
-          <span>版本 0.3.0 · 本地优先桌面陪伴应用</span>
+          <span>版本 0.3.1 · 本地优先桌面陪伴应用</span>
         </div>
         <div className="about-links">
           <a
@@ -1592,6 +1592,7 @@ function SettingsPage() {
 }
 
 function CompanionBall() {
+  const openingRef = useRef(false);
   const [musicPlaying, setMusicPlaying] = useState(
     localStorage.getItem(musicStateKey) === "true",
   );
@@ -1619,6 +1620,18 @@ function CompanionBall() {
     showCompanionMenu().catch(() => undefined);
   }, []);
 
+  const handleOpen = useCallback(() => {
+    if (openingRef.current) return;
+    openingRef.current = true;
+    showMainWindow()
+      .catch(() => undefined)
+      .finally(() => {
+        window.setTimeout(() => {
+          openingRef.current = false;
+        }, 500);
+      });
+  }, []);
+
   return (
     <main
       className="companion-shell"
@@ -1640,7 +1653,7 @@ function CompanionBall() {
       </button>
       <button
         className={`companion-ball ${musicPlaying ? "music-playing" : ""}`}
-        onClick={() => showMainWindow().catch(() => undefined)}
+        onClick={handleOpen}
         aria-label="打开 DayMate"
       >
         {musicPlaying ? (
