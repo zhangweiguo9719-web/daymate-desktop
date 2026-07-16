@@ -8,7 +8,7 @@ export interface TodayStats {
   keyPresses: number;
   lastInputSecondsAgo: number;
   currentApp?: string;
-  topApps: { appName: string; seconds: number }[];
+  topApps: { appName: string; seconds: number; iconDataUrl?: string }[];
 }
 
 const emptyStats: TodayStats = {

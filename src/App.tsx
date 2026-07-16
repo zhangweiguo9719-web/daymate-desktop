@@ -28,6 +28,18 @@ import {
   X,
 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import { getDailyContent } from "./data/dailyContent";
 import {
   musicCategories,
@@ -882,6 +894,66 @@ function TasksPage({
   );
 }
 
+const usageColors = [
+  "#5f8f7a",
+  "#d39a6a",
+  "#7796b5",
+  "#a986b3",
+  "#cf7f7b",
+  "#91a56f",
+  "#c5a55f",
+  "#718b88",
+];
+
+type ApplicationUsage = TodayStats["topApps"][number];
+
+function applicationDisplayName(appName: string) {
+  return appName.replace(/\.exe$/i, "");
+}
+
+function compactApplicationName(appName: string) {
+  const name = applicationDisplayName(appName);
+  return name.length > 14 ? `${name.slice(0, 12)}…` : name;
+}
+
+function formatUsageDuration(seconds: number) {
+  if (seconds < 60) return `${seconds} 秒`;
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (!hours) return `${minutes} 分钟`;
+  return minutes ? `${hours} 小时 ${minutes} 分钟` : `${hours} 小时`;
+}
+
+function ApplicationIcon({
+  application,
+  colorIndex,
+}: {
+  application: ApplicationUsage;
+  colorIndex: number;
+}) {
+  const [failed, setFailed] = useState(false);
+  const name = applicationDisplayName(application.appName);
+  if (application.iconDataUrl && !failed) {
+    return (
+      <img
+        className="application-icon"
+        src={application.iconDataUrl}
+        alt={`${name} 图标`}
+        onError={() => setFailed(true)}
+      />
+    );
+  }
+  return (
+    <span
+      className="application-icon fallback"
+      style={{ background: usageColors[colorIndex % usageColors.length] }}
+      aria-hidden="true"
+    >
+      {name.slice(0, 1).toUpperCase() || "?"}
+    </span>
+  );
+}
+
 function ReviewPage() {
   const [stats, setStats] = useState<TodayStats>({
     activeSeconds: 0,
@@ -902,7 +974,24 @@ function ReviewPage() {
     const interval = window.setInterval(refresh, 3_000);
     return () => window.clearInterval(interval);
   }, []);
-  const minutes = (seconds: number) => `${Math.floor(seconds / 60)} 分钟`;
+  const totalApplicationSeconds = stats.topApps.reduce(
+    (total, application) => total + application.seconds,
+    0,
+  );
+  const rankingData = stats.topApps.slice(0, 8).map((application) => ({
+    name: compactApplicationName(application.appName),
+    seconds: application.seconds,
+  }));
+  const distributionData = stats.topApps.slice(0, 5).map((application) => ({
+    name: applicationDisplayName(application.appName),
+    seconds: application.seconds,
+  }));
+  const otherSeconds = stats.topApps
+    .slice(5)
+    .reduce((total, application) => total + application.seconds, 0);
+  if (otherSeconds)
+    distributionData.push({ name: "其他应用", seconds: otherSeconds });
+  const leadingApplication = stats.topApps[0];
   const lastInput =
     stats.lastInputSecondsAgo < 5
       ? "刚刚"
@@ -925,12 +1014,12 @@ function ReviewPage() {
       </header>
       <section className="stats-grid">
         {[
-          ["电脑活跃", minutes(stats.activeSeconds)],
+          ["电脑活跃", formatUsageDuration(stats.activeSeconds)],
           ["当前应用", stats.currentApp ?? "等待数据"],
           ["最近键鼠输入", lastInput],
           ["鼠标点击", `${stats.mouseClicks} 次`],
           ["键盘按键", `${stats.keyPresses} 次`],
-          ["离开电脑", minutes(stats.idleSeconds)],
+          ["离开电脑", formatUsageDuration(stats.idleSeconds)],
           ["应用切换", `${stats.appSwitches} 次`],
         ].map(([label, value]) => (
           <article className="stat-card" key={label}>
@@ -950,22 +1039,198 @@ function ReviewPage() {
           </span>
         </div>
       </section>
+      {stats.topApps.length > 0 && (
+        <>
+          {leadingApplication && (
+            <section className="usage-insight">
+              <Sparkles size={19} />
+              <div>
+                <strong>
+                  今天停留最久的是「
+                  {applicationDisplayName(leadingApplication.appName)}」
+                </strong>
+                <span>
+                  共 {formatUsageDuration(leadingApplication.seconds)}
+                  ，约占已记录应用时长的{" "}
+                  {totalApplicationSeconds
+                    ? Math.round(
+                        (leadingApplication.seconds / totalApplicationSeconds) *
+                          100,
+                      )
+                    : 0}
+                  %。这里只呈现事实，不评价你如何使用时间。
+                </span>
+              </div>
+            </section>
+          )}
+          <section className="activity-analysis-grid">
+            <article className="card analysis-card ranking-chart-card">
+              <div className="card-heading">
+                <div>
+                  <p className="eyebrow">时长排行</p>
+                  <h2>时间主要去了哪里</h2>
+                </div>
+                <BarChart3 />
+              </div>
+              <div
+                className="ranking-chart"
+                style={{ height: Math.max(270, rankingData.length * 48) }}
+              >
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={rankingData}
+                    layout="vertical"
+                    margin={{ top: 8, right: 20, bottom: 8, left: 18 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+                    <XAxis
+                      type="number"
+                      tickFormatter={(value) =>
+                        `${Math.round(Number(value) / 60)}m`
+                      }
+                      axisLine={false}
+                      tickLine={false}
+                    />
+                    <YAxis
+                      type="category"
+                      dataKey="name"
+                      width={120}
+                      axisLine={false}
+                      tickLine={false}
+                    />
+                    <Tooltip
+                      formatter={(value) => [
+                        formatUsageDuration(Number(value)),
+                        "停留时长",
+                      ]}
+                      cursor={{ fill: "rgba(91, 142, 120, 0.07)" }}
+                    />
+                    <Bar dataKey="seconds" radius={[0, 8, 8, 0]} barSize={18}>
+                      {rankingData.map((application, index) => (
+                        <Cell
+                          key={application.name}
+                          fill={usageColors[index % usageColors.length]}
+                        />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </article>
+            <article className="card analysis-card distribution-card">
+              <div className="card-heading">
+                <div>
+                  <p className="eyebrow">占比分布</p>
+                  <h2>应用时间构成</h2>
+                </div>
+                <Clock3 />
+              </div>
+              <div className="distribution-chart">
+                <ResponsiveContainer width="100%" height={220}>
+                  <PieChart>
+                    <Pie
+                      data={distributionData}
+                      dataKey="seconds"
+                      nameKey="name"
+                      innerRadius={58}
+                      outerRadius={86}
+                      paddingAngle={2}
+                      stroke="none"
+                    >
+                      {distributionData.map((application, index) => (
+                        <Cell
+                          key={application.name}
+                          fill={usageColors[index % usageColors.length]}
+                        />
+                      ))}
+                    </Pie>
+                    <Tooltip
+                      formatter={(value) => [
+                        formatUsageDuration(Number(value)),
+                        "停留时长",
+                      ]}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+                <div className="distribution-total">
+                  <strong>
+                    {formatUsageDuration(totalApplicationSeconds)}
+                  </strong>
+                  <span>已记录</span>
+                </div>
+              </div>
+              <div className="distribution-legend">
+                {distributionData.map((application, index) => (
+                  <div key={application.name}>
+                    <i
+                      style={{
+                        background: usageColors[index % usageColors.length],
+                      }}
+                    />
+                    <span>{application.name}</span>
+                    <strong>
+                      {totalApplicationSeconds
+                        ? Math.round(
+                            (application.seconds / totalApplicationSeconds) *
+                              100,
+                          )
+                        : 0}
+                      %
+                    </strong>
+                  </div>
+                ))}
+              </div>
+            </article>
+          </section>
+        </>
+      )}
       <section className="card timeline">
         <div className="card-heading">
           <div>
-            <p className="eyebrow">应用排行</p>
-            <h2>今天的主要足迹</h2>
+            <p className="eyebrow">应用明细</p>
+            <h2>每个应用停留了多久</h2>
           </div>
           <Clock3 />
         </div>
         {stats.topApps.length ? (
-          <div className="app-ranking">
-            {stats.topApps.map((app) => (
-              <div key={app.appName}>
-                <strong>{app.appName}</strong>
-                <span>{minutes(app.seconds)}</span>
-              </div>
-            ))}
+          <div className="app-usage-list">
+            {stats.topApps.map((application, index) => {
+              const percentage = totalApplicationSeconds
+                ? (application.seconds / totalApplicationSeconds) * 100
+                : 0;
+              return (
+                <article className="app-usage-row" key={application.appName}>
+                  <ApplicationIcon
+                    application={application}
+                    colorIndex={index}
+                  />
+                  <div className="app-usage-content">
+                    <div className="app-usage-heading">
+                      <div>
+                        <strong>
+                          {applicationDisplayName(application.appName)}
+                        </strong>
+                        <span>{application.appName}</span>
+                      </div>
+                      <div className="app-usage-duration">
+                        <strong>
+                          {formatUsageDuration(application.seconds)}
+                        </strong>
+                        <span>{percentage.toFixed(1)}%</span>
+                      </div>
+                    </div>
+                    <div className="app-usage-track">
+                      <i
+                        style={{
+                          width: `${Math.max(percentage, 1)}%`,
+                          background: usageColors[index % usageColors.length],
+                        }}
+                      />
+                    </div>
+                  </div>
+                </article>
+              );
+            })}
           </div>
         ) : (
           <div className="empty-state review-empty">
@@ -1570,7 +1835,7 @@ function SettingsPage() {
         <div className="brand-mark">日</div>
         <div>
           <strong>DayMate 日伴</strong>
-          <span>版本 0.3.2 · 本地优先桌面陪伴应用</span>
+          <span>版本 0.4.0 · 本地优先桌面陪伴应用</span>
         </div>
         <div className="about-links">
           <a

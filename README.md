@@ -8,9 +8,9 @@
 
 DayMate 是一款 Windows 优先、本地优先的桌面陪伴应用。它不是企业监控软件，也不是要求用户维护复杂清单的项目管理工具。它只想帮用户看见昨天、选出今天最值得做的一件事，并更轻松地开始。
 
-当前版本：`0.3.2`（MVP 开发版）
+当前版本：`0.4.0`（MVP 开发版）
 
-[⬇️ 直接下载 DayMate 0.3.2 Windows 安装包](https://github.com/zhangweiguo9719-web/daymate-desktop/releases/download/v0.3.2/DayMate_0.3.2_x64-setup.exe) · [查看最新版本](https://github.com/zhangweiguo9719-web/daymate-desktop/releases/latest) · [中文使用手册](USER_GUIDE.md)
+[⬇️ 直接下载 DayMate 0.4.0 Windows 安装包](https://github.com/zhangweiguo9719-web/daymate-desktop/releases/download/v0.4.0/DayMate_0.4.0_x64-setup.exe) · [查看最新版本](https://github.com/zhangweiguo9719-web/daymate-desktop/releases/latest) · [中文使用手册](USER_GUIDE.md)
 
 ## 已实现
 
@@ -23,6 +23,7 @@ DayMate 是一款 Windows 优先、本地优先的桌面陪伴应用。它不是
 - 播放控制：随机推荐、自动连播、顺序播放、单曲循环；切换页面或收起窗口后继续播放
 - 浮动球播放律动，以及托盘/浮动球原生右键退出菜单
 - 键鼠活跃判断：展示鼠标点击、键盘按键和最近输入时间，避免亮屏造成使用时长误判
+- 应用级时间分析：真实程序图标、全部应用停留时长与占比、横向排行图和环形分布图
 - 四首 CC0 音乐随应用离线提供，网络曲库不可用时也能播放
 - 每日舒适背景：七套柔和渐变按日期稳定轮换，也可随时手动换景
 - 多 AI 服务商设置与连接测试；API Key 安全保存到 Windows 凭据管理器
@@ -49,7 +50,7 @@ DayMate 是一款 Windows 优先、本地优先的桌面陪伴应用。它不是
 | 前端       | React 19 + TypeScript + Vite 7               | 页面和交互                                                   |
 | 状态       | Zustand                                      | 用户设置与任务状态，本地持久化                               |
 | UI         | 原生 CSS + Lucide React                      | 轻量界面与图标                                               |
-| 桌面后端   | Rust                                         | Windows 活动采集、隐私边界、数据库                           |
+| 桌面后端   | Rust + Windows Icons                         | Windows 活动采集、本机程序图标提取、隐私边界、数据库         |
 | 本地数据库 | SQLite / rusqlite                            | 应用使用会话与迁移记录                                       |
 | 音乐       | Audius API + CC0 本地曲库 + HTML Audio       | 大型开放音乐目录搜索、应用内流式播放、离线兜底与 AI 场景推荐 |
 | AI 接口    | OpenAI 兼容协议 + Windows Credential Manager | 多平台配置、连接测试和密钥隔离                               |

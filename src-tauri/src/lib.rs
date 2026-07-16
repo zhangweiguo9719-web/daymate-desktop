@@ -2,10 +2,11 @@ use chrono::{DateTime, Local, Utc};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc,
+        Arc, Mutex,
     },
     thread,
     time::{Duration, Instant},
@@ -25,6 +26,7 @@ struct AppState {
     idle_detection_enabled: Arc<AtomicBool>,
     reset_requested: Arc<AtomicBool>,
     input_counters: Arc<InputCounters>,
+    icon_cache: Mutex<HashMap<String, Option<String>>>,
 }
 
 #[derive(Default)]
@@ -53,6 +55,13 @@ struct TodayStats {
 struct AppUsage {
     app_name: String,
     seconds: i64,
+    icon_data_url: Option<String>,
+}
+
+struct ForegroundApplication {
+    app_name: String,
+    window_title: Option<String>,
+    executable_path: String,
 }
 
 #[derive(Clone, Copy)]
@@ -146,6 +155,14 @@ fn initialize_database(path: &Path) -> Result<(), String> {
             )
             .map_err(|error| error.to_string())?;
     }
+    if version < 4 {
+        connection
+            .execute_batch(
+                "ALTER TABLE app_usage_sessions ADD COLUMN executable_path TEXT;
+                 INSERT INTO migration_history(version, applied_at) VALUES (4, datetime('now'));",
+            )
+            .map_err(|error| error.to_string())?;
+    }
     Ok(())
 }
 
@@ -153,6 +170,7 @@ fn save_session(
     path: &Path,
     app_name: &str,
     window_title: Option<&str>,
+    executable_path: Option<&str>,
     started_at: DateTime<Utc>,
     ended_at: DateTime<Utc>,
     metrics: SessionMetrics,
@@ -167,12 +185,13 @@ fn save_session(
     if let Ok(connection) = Connection::open(path) {
         let _ = connection.execute(
             "INSERT INTO app_usage_sessions
-             (app_name, window_title, started_at, ended_at, active_seconds, idle_seconds,
-              mouse_clicks, key_presses, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?4)",
+             (app_name, window_title, executable_path, started_at, ended_at, active_seconds,
+              idle_seconds, mouse_clicks, key_presses, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?5)",
             params![
                 app_name,
                 window_title,
+                executable_path,
                 started_at.to_rfc3339(),
                 ended_at.to_rfc3339(),
                 metrics.active_seconds,
@@ -185,22 +204,34 @@ fn save_session(
 }
 
 #[cfg(windows)]
-fn foreground_application(include_title: bool) -> Option<(String, Option<String>)> {
+fn foreground_application(include_title: bool) -> Option<ForegroundApplication> {
     use windows_sys::Win32::{
-        Foundation::CloseHandle,
+        Foundation::{CloseHandle, HWND, LPARAM},
         System::Threading::{
             OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
         },
-        UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId},
+        UI::WindowsAndMessaging::{
+            EnumChildWindows, GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId,
+        },
     };
 
-    unsafe {
-        let window = GetForegroundWindow();
-        if window.is_null() {
-            return None;
-        }
+    struct ChildProcessSearch {
+        host_process_id: u32,
+        application_process_id: u32,
+    }
+
+    unsafe extern "system" fn find_application_child(window: HWND, data: LPARAM) -> i32 {
+        let search = &mut *(data as *mut ChildProcessSearch);
         let mut process_id = 0;
         GetWindowThreadProcessId(window, &mut process_id);
+        if process_id != 0 && process_id != search.host_process_id {
+            search.application_process_id = process_id;
+            return 0;
+        }
+        1
+    }
+
+    unsafe fn executable_path(process_id: u32) -> Option<String> {
         let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process_id);
         if process.is_null() {
             return None;
@@ -209,10 +240,33 @@ fn foreground_application(include_title: bool) -> Option<(String, Option<String>
         let mut size = path.len() as u32;
         let ok = QueryFullProcessImageNameW(process, 0, path.as_mut_ptr(), &mut size);
         CloseHandle(process);
-        if ok == 0 {
+        (ok != 0).then(|| String::from_utf16_lossy(&path[..size as usize]))
+    }
+
+    unsafe {
+        let window = GetForegroundWindow();
+        if window.is_null() {
             return None;
         }
-        let full_path = String::from_utf16_lossy(&path[..size as usize]);
+        let mut process_id = 0;
+        GetWindowThreadProcessId(window, &mut process_id);
+        let mut full_path = executable_path(process_id)?;
+        if full_path.ends_with("\\ApplicationFrameHost.exe") {
+            let mut search = ChildProcessSearch {
+                host_process_id: process_id,
+                application_process_id: 0,
+            };
+            EnumChildWindows(
+                window,
+                Some(find_application_child),
+                &mut search as *mut ChildProcessSearch as LPARAM,
+            );
+            if search.application_process_id != 0 {
+                if let Some(application_path) = executable_path(search.application_process_id) {
+                    full_path = application_path;
+                }
+            }
+        }
         let app_name = Path::new(&full_path)
             .file_name()
             .and_then(|name| name.to_str())
@@ -223,12 +277,16 @@ fn foreground_application(include_title: bool) -> Option<(String, Option<String>
             let length = GetWindowTextW(window, buffer.as_mut_ptr(), buffer.len() as i32);
             String::from_utf16_lossy(&buffer[..length.max(0) as usize])
         });
-        Some((app_name, title.filter(|value| !value.is_empty())))
+        Some(ForegroundApplication {
+            app_name,
+            window_title: title.filter(|value| !value.is_empty()),
+            executable_path: full_path,
+        })
     }
 }
 
 #[cfg(not(windows))]
-fn foreground_application(_include_title: bool) -> Option<(String, Option<String>)> {
+fn foreground_application(_include_title: bool) -> Option<ForegroundApplication> {
     None
 }
 
@@ -291,6 +349,7 @@ fn start_activity_tracker(state: &AppState) {
     thread::spawn(move || {
         let mut current_app = String::new();
         let mut current_title: Option<String> = None;
+        let mut current_executable_path = String::new();
         let mut started_at = Utc::now();
         let mut last_flush = Instant::now();
         let mut active_seconds = 0i64;
@@ -306,6 +365,7 @@ fn start_activity_tracker(state: &AppState) {
             if reset_requested.swap(false, Ordering::Relaxed) {
                 current_app.clear();
                 current_title = None;
+                current_executable_path.clear();
                 active_seconds = 0;
                 inactive_seconds = 0;
                 mouse_clicks = 0;
@@ -336,9 +396,12 @@ fn start_activity_tracker(state: &AppState) {
                 continue;
             }
             let capture_title = title_capture_enabled.load(Ordering::Relaxed);
-            let Some((app_name, title)) = foreground_application(capture_title) else {
+            let Some(application) = foreground_application(capture_title) else {
                 continue;
             };
+            let app_name = application.app_name;
+            let title = application.window_title;
+            let executable_path = application.executable_path;
             let is_idle = idle_detection_enabled.load(Ordering::Relaxed) && idle_seconds() >= 300;
             let day_changed = Local::now().date_naive() != current_day;
             let app_changed = app_name != current_app || (capture_title && title != current_title);
@@ -350,6 +413,8 @@ fn start_activity_tracker(state: &AppState) {
                     &database_path,
                     &current_app,
                     current_title.as_deref(),
+                    (!current_executable_path.is_empty())
+                        .then_some(current_executable_path.as_str()),
                     started_at,
                     Utc::now(),
                     SessionMetrics {
@@ -361,6 +426,7 @@ fn start_activity_tracker(state: &AppState) {
                 );
                 current_app = app_name.clone();
                 current_title = title.clone();
+                current_executable_path = executable_path.clone();
                 started_at = Utc::now();
                 active_seconds = 0;
                 inactive_seconds = 0;
@@ -378,6 +444,7 @@ fn start_activity_tracker(state: &AppState) {
             if current_app.is_empty() {
                 current_app = app_name;
                 current_title = title;
+                current_executable_path = executable_path;
                 started_at = Utc::now();
             }
             if is_idle {
@@ -411,6 +478,37 @@ fn set_tracking(
     state
         .idle_detection_enabled
         .store(detect_idle, Ordering::Relaxed);
+}
+
+#[cfg(windows)]
+fn application_icon_data_url(
+    executable_path: Option<&str>,
+    cache: &Mutex<HashMap<String, Option<String>>>,
+) -> Option<String> {
+    let path = executable_path?.trim();
+    if path.is_empty() {
+        return None;
+    }
+    if let Ok(cache) = cache.lock() {
+        if let Some(icon) = cache.get(path) {
+            return icon.clone();
+        }
+    }
+    let icon = windows_icons::get_icon_base64_by_path(path)
+        .ok()
+        .map(|value| format!("data:image/png;base64,{value}"));
+    if let Ok(mut cache) = cache.lock() {
+        cache.insert(path.to_string(), icon.clone());
+    }
+    icon
+}
+
+#[cfg(not(windows))]
+fn application_icon_data_url(
+    _executable_path: Option<&str>,
+    _cache: &Mutex<HashMap<String, Option<String>>>,
+) -> Option<String> {
+    None
 }
 
 #[tauri::command]
@@ -450,21 +548,26 @@ fn get_today_stats(state: State<'_, AppState>) -> Result<TodayStats, String> {
             .map_err(|error| error.to_string())?;
     let mut statement = connection
         .prepare(
-            "SELECT app_name, SUM(active_seconds) AS seconds FROM app_usage_sessions
-             WHERE started_at >= ?1 GROUP BY app_name ORDER BY seconds DESC LIMIT 5",
+            "SELECT app_name, SUM(active_seconds) AS seconds,
+                    MAX(NULLIF(executable_path, '')) AS executable_path
+             FROM app_usage_sessions WHERE started_at >= ?1
+             GROUP BY app_name HAVING SUM(active_seconds) > 0 ORDER BY seconds DESC",
         )
         .map_err(|error| error.to_string())?;
-    let top_apps = statement
-        .query_map([&start], |row| {
-            Ok(AppUsage {
-                app_name: row.get(0)?,
-                seconds: row.get(1)?,
-            })
-        })
+    let application_rows: Vec<(String, i64, Option<String>)> = statement
+        .query_map([&start], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
         .map_err(|error| error.to_string())?
         .filter_map(Result::ok)
         .collect();
-    let current_app = foreground_application(false).map(|value| value.0);
+    let top_apps = application_rows
+        .into_iter()
+        .map(|(app_name, seconds, executable_path)| AppUsage {
+            app_name,
+            seconds,
+            icon_data_url: application_icon_data_url(executable_path.as_deref(), &state.icon_cache),
+        })
+        .collect();
+    let current_app = foreground_application(false).map(|value| value.app_name);
     let mouse_clicks = stored_mouse_clicks
         + state
             .input_counters
@@ -701,6 +804,7 @@ pub fn run() {
                 idle_detection_enabled: Arc::new(AtomicBool::new(true)),
                 reset_requested: Arc::new(AtomicBool::new(false)),
                 input_counters: Arc::new(InputCounters::default()),
+                icon_cache: Mutex::new(HashMap::new()),
             };
             start_input_counter(state.input_counters.clone());
             start_activity_tracker(&state);
@@ -808,12 +912,13 @@ mod tests {
             .collect();
         assert!(columns.contains(&"mouse_clicks".to_string()));
         assert!(columns.contains(&"key_presses".to_string()));
+        assert!(columns.contains(&"executable_path".to_string()));
         let version: i64 = connection
             .query_row("SELECT MAX(version) FROM migration_history", [], |row| {
                 row.get(0)
             })
             .expect("read migration version");
-        assert_eq!(version, 3);
+        assert_eq!(version, 4);
         drop(statement);
         drop(connection);
         let _ = std::fs::remove_file(path);
@@ -890,8 +995,26 @@ mod tests {
                 row.get(0)
             })
             .expect("read migration version");
-        assert_eq!(version, 3);
+        assert_eq!(version, 4);
         drop(connection);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn extracts_and_caches_a_windows_application_icon() {
+        let windows_dir = std::env::var("WINDIR").expect("Windows directory");
+        let executable = PathBuf::from(windows_dir)
+            .join("System32")
+            .join("notepad.exe");
+        let cache = Mutex::new(HashMap::new());
+        let icon = application_icon_data_url(executable.to_str(), &cache)
+            .expect("extract notepad application icon");
+        assert!(icon.starts_with("data:image/png;base64,"));
+        assert_eq!(cache.lock().expect("icon cache").len(), 1);
+        assert_eq!(
+            application_icon_data_url(executable.to_str(), &cache),
+            Some(icon)
+        );
     }
 }
